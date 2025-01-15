@@ -1,12 +1,23 @@
 import { useForm } from "react-hook-form";
-import { useAuth } from "../../services/auth";
-import Modal from "../Modal";
-import Field from "../Forms/Field";
-import { HexColorPicker } from "react-colorful";
-import styles from "./TagsModal.module.scss";
 import React from "react";
-import Tag from "./Tag";
 import { TagInterface } from "back-end/types/tag";
+import { Text, Container } from "@radix-ui/themes";
+import { useAuth } from "@/services/auth";
+import Modal from "@/components/Modal";
+import Field from "@/components/Forms/Field";
+import { RadixColor } from "@/components/Radix/HelperText";
+import { Select, SelectItem } from "@/components/Radix/Select";
+import Tag from "./Tag";
+
+export const TAG_COLORS = [
+  "blue",
+  "teal",
+  "pink",
+  "orange",
+  "lime",
+  "gray",
+  "gold",
+] as const;
 
 export default function TagsModal({
   existing,
@@ -20,28 +31,25 @@ export default function TagsModal({
   const form = useForm<TagInterface>({
     defaultValues: {
       id: existing?.id || "",
-      color: existing?.color || "#029dd1",
+      color: existing?.color || "blue",
       description: existing?.description || "",
     },
   });
   const { apiCall } = useAuth();
 
-  const tagColors = [
-    { value: "#029dd1", label: "light-blue" },
-    { value: "#0047bd", label: "blue" },
-    { value: "#F170AC", label: "pink" },
-    { value: "#D64538", label: "red" },
-    { value: "#fc8414", label: "orange" },
-    { value: "#e2d221", label: "yellow" },
-    { value: "#9edd63", label: "lime" },
-    { value: "#28A66B", label: "green" },
-    { value: "#20C9B9", label: "teal" },
-  ];
+  // Add the existing color to the list of options if it's not already there
+  // Necessary for hex colors that were converted to Radix colors that we don't
+  // allow for new tags
+  const colorOptions = existing.color
+    ? [...new Set([...TAG_COLORS, existing.color])]
+    : TAG_COLORS;
 
   return (
     <Modal
+      trackingEventModalType=""
       open={true}
       close={close}
+      cta={existing?.id ? "Save Changes" : "Create Tag"}
       header={existing?.id ? `Edit Tag: ${existing.id}` : "Create Tag"}
       submit={form.handleSubmit(async (value) => {
         await apiCall(`/tag`, {
@@ -51,59 +59,56 @@ export default function TagsModal({
         await onSuccess();
       })}
     >
-      <div className="colorpicker tagmodal">
+      <div>
         {!existing?.id && (
-          <Field
-            name="Name"
-            label="Name"
-            minLength={2}
-            maxLength={64}
-            className=""
-            required
-            {...form.register("id")}
-          />
-        )}
-        <label>Color:</label>
-        <div className={styles.picker}>
-          <HexColorPicker
-            onChange={(c) => {
-              form.setValue("color", c);
-            }}
-            style={{ margin: "0 auto" }}
-            color={form.watch("color") || ""}
-            id="tagcolor"
-          />
-          <div className={styles.picker__swatches}>
-            {tagColors.map((c) => (
-              <button
-                key={c.value}
-                className={styles.picker__swatch}
-                style={{ background: c.value }}
-                onClick={(e) => {
-                  e.preventDefault();
-                  form.setValue("color", c.value);
-                }}
-              />
-            ))}
-          </div>
-        </div>
-        <Field
-          name="Name"
-          label="Description"
-          textarea
-          maxLength={256}
-          {...form.register("description")}
-        />
-        <div>
-          <label>Preview</label>
-          <div>
-            <Tag
-              tag={form.watch("id")}
-              color={form.watch("color")}
-              description={form.watch("description")}
+          <Container mb="3">
+            <Text as="label" size="3" weight="medium">
+              Name
+            </Text>
+            <Field
+              minLength={2}
+              maxLength={64}
+              className=""
+              required
+              {...form.register("id")}
             />
+          </Container>
+        )}
+        <Select
+          label="Color"
+          value={form.watch("color")}
+          setValue={(v) => form.setValue("color", v)}
+          mb="3"
+        >
+          {colorOptions.map((c) => (
+            <SelectItem key={c} value={c}>
+              {c}
+            </SelectItem>
+          ))}
+        </Select>
+
+        <Container mb="3">
+          <Text as="label" size="3" weight="medium">
+            Description
+          </Text>
+          <Field textarea maxLength={256} {...form.register("description")} />
+        </Container>
+
+        <Container>
+          <Text as="label" size="3" weight="medium">
+            Preview
+          </Text>
+          <div>
+            {form.watch("id") && (
+              <Tag
+                tag={form.watch("id")}
+                color={form.watch("color") as RadixColor}
+                description={form.watch("description")}
+                skipMargin
+              />
+            )}
           </div>
-        </div>
+        </Container>
       </div>
     </Modal>
   );

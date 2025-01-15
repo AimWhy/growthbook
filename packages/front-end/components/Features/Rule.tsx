@@ -1,29 +1,53 @@
 import { FeatureInterface, FeatureRule } from "back-end/types/feature";
-import { useAuth } from "../../services/auth";
-import Button from "../Button";
-import DeleteButton from "../DeleteButton";
-import MoreMenu from "../Dropdown/MoreMenu";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import React, { forwardRef, ReactElement } from "react";
+import {
+  FaArrowsAlt,
+  FaExclamationTriangle,
+  FaExternalLinkAlt,
+} from "react-icons/fa";
+import Link from "next/link";
+import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
+import { filterEnvironmentsByFeature } from "shared/util";
+import { useAuth } from "@/services/auth";
+import track from "@/services/track";
+import { getRules, isRuleDisabled, useEnvironments } from "@/services/features";
+import { getUpcomingScheduleRule } from "@/services/scheduleRules";
+import Tooltip from "@/components/Tooltip/Tooltip";
+import Button from "@/components/Button";
+import DeleteButton from "@/components/DeleteButton/DeleteButton";
+import MoreMenu from "@/components/Dropdown/MoreMenu";
+import usePermissionsUtil from "@/hooks/usePermissionsUtils";
+import HelperText from "@/components/Radix/HelperText";
 import ConditionDisplay from "./ConditionDisplay";
 import ForceSummary from "./ForceSummary";
 import RolloutSummary from "./RolloutSummary";
-import { useSortable } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import React, { forwardRef } from "react";
-import { FaArrowsAlt } from "react-icons/fa";
 import ExperimentSummary from "./ExperimentSummary";
-import track from "../../services/track";
-import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
-import { getRules } from "../../services/features";
-import { useEnvironments } from "../../services/features";
+import RuleStatusPill from "./RuleStatusPill";
+import ExperimentRefSummary from "./ExperimentRefSummary";
 
 interface SortableProps {
   i: number;
   rule: FeatureRule;
   feature: FeatureInterface;
   environment: string;
-  experiments: Record<string, ExperimentInterfaceStringDates>;
   mutate: () => void;
-  setRuleModal: ({ environment: string, i: number }) => void;
+  setRuleModal: (args: {
+    environment: string;
+    i: number;
+    defaultType?: string;
+  }) => void;
+  setCopyRuleModal: (args: {
+    environment: string;
+    rules: FeatureRule[];
+  }) => void;
+  unreachable?: boolean;
+  version: number;
+  setVersion: (version: number) => void;
+  locked: boolean;
+  experimentsMap: Map<string, ExperimentInterfaceStringDates>;
+  hideDisabled?: boolean;
 }
 
 type RuleProps = SortableProps &
@@ -40,60 +64,133 @@ export const Rule = forwardRef<HTMLDivElement, RuleProps>(
       feature,
       environment,
       setRuleModal,
+      setCopyRuleModal,
       mutate,
       handle,
-      experiments,
+      unreachable,
+      version,
+      setVersion,
+      locked,
+      experimentsMap,
+      hideDisabled,
       ...props
     },
     ref
   ) => {
     const { apiCall } = useAuth();
-    const type = feature.valueType;
-    const title =
+
+    const allEnvironments = useEnvironments();
+    const environments = filterEnvironmentsByFeature(allEnvironments, feature);
+
+    let title: string | ReactElement =
       rule.description ||
       rule.type[0].toUpperCase() + rule.type.slice(1) + " Rule";
-    const rules = getRules(feature, environment);
-    const environments = useEnvironments();
+    if (rule.type === "experiment") {
+      title = (
+        <div className="d-flex align-items-center">
+          {title}
+          <Tooltip
+            body={`This is a legacy "inline experiment" feature rule. New experiment rules must be created as references to experiments.`}
+          >
+            <HelperText status="info" size="sm" ml="3">
+              legacy
+            </HelperText>
+          </Tooltip>
+        </div>
+      );
+    }
 
+    const linkedExperiment =
+      rule.type === "experiment-ref" && experimentsMap.get(rule.experimentId);
+
+    const rules = getRules(feature, environment);
+    const permissionsUtil = usePermissionsUtil();
+
+    const canEdit =
+      !locked &&
+      permissionsUtil.canViewFeatureModal(feature.project) &&
+      permissionsUtil.canManageFeatureDrafts(feature);
+
+    const upcomingScheduleRule = getUpcomingScheduleRule(rule);
+
+    const scheduleCompletedAndDisabled =
+      !upcomingScheduleRule &&
+      rule?.scheduleRules?.length &&
+      rule.scheduleRules.at(-1)?.timestamp !== null;
+
+    const ruleDisabled = isRuleDisabled(rule, experimentsMap);
+
+    const hasCondition =
+      (rule.condition && rule.condition !== "{}") ||
+      !!rule.savedGroups?.length ||
+      !!rule.prerequisites?.length;
+
+    if (hideDisabled && ruleDisabled) {
+      return null;
+    }
     return (
-      <div
-        className={`p-3 ${
-          i < rules.length - 1 ? "border-bottom" : ""
-        } bg-white`}
-        {...props}
-        ref={ref}
-      >
+      <div className={`p-3 border bg-white`} {...props} ref={ref}>
         <div className="d-flex mb-2 align-items-center">
           <div>
-            <div
-              className="text-light border rounded-circle"
-              style={{
-                width: 28,
-                height: 28,
-                lineHeight: "28px",
-                textAlign: "center",
-                background: "#7C45EA",
-                fontWeight: "bold",
-                opacity: !rule.enabled ? 0.5 : 1,
-              }}
-            >
-              {i + 1}
-            </div>
-          </div>
-          <div
-            style={{ flex: 1, opacity: !rule.enabled ? 0.5 : 1 }}
-            className="mx-2"
-          >
-            {title}
-          </div>
-          {!rule.enabled && (
-            <div className="mr-3">
-              <div className="bg-secondary text-light border px-2 rounded">
-                DISABLED
+            <Tooltip body={ruleDisabled ? "This rule will be skipped" : ""}>
+              <div
+                className={`text-light border rounded-circle text-center font-weight-bold ${
+                  ruleDisabled ? "bg-secondary" : "bg-purple"
+                }`}
+                style={{
+                  width: 28,
+                  height: 28,
+                  lineHeight: "28px",
+                }}
+              >
+                {i + 1}
               </div>
-            </div>
-          )}
-          {rules.length > 1 && (
+            </Tooltip>
+          </div>
+          <div className="flex-1 mx-2">
+            {linkedExperiment ? (
+              <div>
+                {linkedExperiment.type === "multi-armed-bandit"
+                  ? "Bandit"
+                  : "Experiment"}
+                : <strong className="mr-3">{linkedExperiment.name}</strong>{" "}
+                <Link
+                  href={`/${
+                    linkedExperiment.type === "multi-armed-bandit"
+                      ? "bandit"
+                      : "experiment"
+                  }/${linkedExperiment.id}`}
+                >
+                  View{" "}
+                  {linkedExperiment.type === "multi-armed-bandit"
+                    ? "Bandit"
+                    : "Experiment"}
+                  <FaExternalLinkAlt
+                    className="small ml-1 position-relative ml-2"
+                    style={{ top: "-1px" }}
+                  />
+                </Link>
+              </div>
+            ) : (
+              title
+            )}
+            {unreachable && !ruleDisabled ? (
+              <Tooltip body="A rule above this one will serve to 100% of the traffic, and this rule will never be reached.">
+                <span className="ml-2 font-italic bg-secondary text-light border px-2 rounded d-inline-block">
+                  {" "}
+                  <FaExclamationTriangle className="text-warning" /> This rule
+                  is not reachable
+                </span>
+              </Tooltip>
+            ) : null}
+          </div>
+          <RuleStatusPill
+            rule={rule}
+            upcomingScheduleRule={upcomingScheduleRule}
+            scheduleCompletedAndDisabled={!!scheduleCompletedAndDisabled}
+            linkedExperiment={linkedExperiment || undefined}
+          />
+          {rules.length > 1 && canEdit && (
             <div
               {...handle}
               title="Drag and drop to re-order rules"
@@ -103,140 +200,138 @@ export const Rule = forwardRef<HTMLDivElement, RuleProps>(
             </div>
           )}
           <div>
-            <MoreMenu id={"edit_rule_" + rule.id}>
-              <a
-                href="#"
-                className="dropdown-item"
-                onClick={(e) => {
-                  e.preventDefault();
-                  setRuleModal({ environment, i });
-                }}
-              >
-                Edit
-              </a>
-              <Button
-                color=""
-                className="dropdown-item"
-                onClick={async () => {
-                  track(
-                    rule.enabled
-                      ? "Disable Feature Rule"
-                      : "Enable Feature Rule",
-                    {
-                      ruleIndex: i,
-                      environment,
-                      type: rule.type,
-                    }
-                  );
-                  await apiCall(`/feature/${feature.id}/rule`, {
-                    method: "PUT",
-                    body: JSON.stringify({
-                      environment,
-                      rule: {
-                        ...rule,
-                        enabled: !rule.enabled,
-                      },
-                      i,
-                    }),
-                  });
-                  mutate();
-                }}
-              >
-                {rule.enabled ? "Disable" : "Enable"}
-              </Button>
-              {environments
-                .filter((e) => e.id !== environment)
-                .map((en) => (
-                  <Button
-                    key={en.id}
-                    color=""
-                    className="dropdown-item"
-                    onClick={async () => {
-                      await apiCall(`/feature/${feature.id}/rule`, {
-                        method: "POST",
-                        body: JSON.stringify({
-                          environment: en.id,
-                          rule: { ...rule, id: "" },
-                        }),
-                      });
-                      track("Clone Feature Rule", {
+            {canEdit && (
+              <MoreMenu>
+                <a
+                  href="#"
+                  className="dropdown-item"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setRuleModal({ environment, i });
+                  }}
+                >
+                  Edit
+                </a>
+                <Button
+                  color=""
+                  className="dropdown-item"
+                  onClick={async () => {
+                    track(
+                      rule.enabled
+                        ? "Disable Feature Rule"
+                        : "Enable Feature Rule",
+                      {
                         ruleIndex: i,
                         environment,
                         type: rule.type,
-                      });
-                      mutate();
+                      }
+                    );
+                    const res = await apiCall<{ version: number }>(
+                      `/feature/${feature.id}/${version}/rule`,
+                      {
+                        method: "PUT",
+                        body: JSON.stringify({
+                          environment,
+                          rule: {
+                            ...rule,
+                            enabled: !rule.enabled,
+                          },
+                          i,
+                        }),
+                      }
+                    );
+                    await mutate();
+                    res.version && setVersion(res.version);
+                  }}
+                >
+                  {rule.enabled ? "Disable" : "Enable"}
+                </Button>
+                {environments.length > 1 && (
+                  <Button
+                    color=""
+                    className="dropdown-item"
+                    onClick={() => {
+                      setCopyRuleModal({ environment, rules: [rule] });
                     }}
                   >
-                    Copy to {en.id}
+                    Copy rule to environment(s)
                   </Button>
-                ))}
-              <DeleteButton
-                className="dropdown-item"
-                displayName="Rule"
-                useIcon={false}
-                text="Delete"
-                onClick={async () => {
-                  track("Delete Feature Rule", {
-                    ruleIndex: i,
-                    environment,
-                    type: rule.type,
-                  });
-                  await apiCall(`/feature/${feature.id}/rule`, {
-                    method: "DELETE",
-                    body: JSON.stringify({
+                )}
+                <DeleteButton
+                  className="dropdown-item"
+                  displayName="Rule"
+                  useIcon={false}
+                  text="Delete"
+                  onClick={async () => {
+                    track("Delete Feature Rule", {
+                      ruleIndex: i,
                       environment,
-                      i,
-                    }),
-                  });
-                  mutate();
-                }}
-              />
-            </MoreMenu>
+                      type: rule.type,
+                    });
+                    const res = await apiCall<{ version: number }>(
+                      `/feature/${feature.id}/${version}/rule`,
+                      {
+                        method: "DELETE",
+                        body: JSON.stringify({
+                          environment,
+                          i,
+                        }),
+                      }
+                    );
+                    await mutate();
+                    res.version && setVersion(res.version);
+                  }}
+                />
+              </MoreMenu>
+            )}
           </div>
         </div>
         <div className="d-flex">
-          <div style={{ flex: 1 }} className="pt-1 position-relative">
-            {!rule.enabled && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  zIndex: 99,
-                  background: "rgba(255,255,255,.7)",
-                  display: "flex",
-                  flexDirection: "column",
-                  fontSize: 25,
-                }}
-              ></div>
-            )}
-            {rule.condition && rule.condition !== "{}" && (
+          <div
+            style={{
+              maxWidth: "100%",
+              opacity: ruleDisabled ? 0.4 : 1,
+            }}
+            className="flex-1 pt-1 position-relative"
+          >
+            {hasCondition && rule.type !== "experiment-ref" && (
               <div className="row mb-3 align-items-top">
-                <div className="col-auto">
+                <div className="col-auto d-flex align-items-center">
                   <strong>IF</strong>
                 </div>
                 <div className="col">
-                  <ConditionDisplay condition={rule.condition} />
+                  <ConditionDisplay
+                    condition={rule.condition || ""}
+                    savedGroups={rule.savedGroups}
+                    prerequisites={rule.prerequisites}
+                  />
                 </div>
               </div>
             )}
             {rule.type === "force" && (
-              <ForceSummary value={rule.value} type={type} />
+              <ForceSummary value={rule.value} feature={feature} />
             )}
             {rule.type === "rollout" && (
               <RolloutSummary
                 value={rule.value ?? ""}
                 coverage={rule.coverage ?? 1}
-                type={type}
+                feature={feature}
                 hashAttribute={rule.hashAttribute || ""}
               />
             )}
             {rule.type === "experiment" && (
               <ExperimentSummary
                 feature={feature}
-                experiment={experiments[rule.trackingKey || feature.id]}
+                experiment={Array.from(experimentsMap.values()).find(
+                  (exp) => exp.trackingKey === (rule.trackingKey || feature.id)
+                )}
+                rule={rule}
+              />
+            )}
+            {rule.type === "experiment-ref" && (
+              <ExperimentRefSummary
+                feature={feature}
+                experiment={experimentsMap.get(rule.experimentId)}
                 rule={rule}
               />
             )}
@@ -261,6 +356,7 @@ export function SortableRule(props: SortableProps) {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: active?.id === props.rule.id ? 0.3 : 1,
+    margin: -1,
   };
 
   return (

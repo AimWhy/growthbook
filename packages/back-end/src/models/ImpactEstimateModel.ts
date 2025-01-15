@@ -1,13 +1,15 @@
 import mongoose from "mongoose";
-import { ImpactEstimateInterface } from "../../types/impact-estimate";
 import uniqid from "uniqid";
-import { getMetricById } from "../models/MetricModel";
-import { getSourceIntegrationObject } from "../services/datasource";
-import { SegmentInterface } from "../../types/segment";
-import { SegmentModel } from "./SegmentModel";
-import { getDataSourceById } from "./DataSourceModel";
-import { processMetricValueQueryResponse } from "../services/queries";
-import { DEFAULT_CONVERSION_WINDOW_HOURS } from "../util/secrets";
+import { getConversionWindowHours } from "shared/experiments";
+import { ImpactEstimateInterface } from "back-end/types/impact-estimate";
+import { getMetricById } from "back-end/src/models/MetricModel";
+import { getIntegrationFromDatasourceId } from "back-end/src/services/datasource";
+import { SegmentInterface } from "back-end/types/segment";
+import { DEFAULT_CONVERSION_WINDOW_HOURS } from "back-end/src/util/secrets";
+import { processMetricValueQueryResponse } from "back-end/src/queryRunners/LegacyMetricAnalysisQueryRunner";
+import { ReqContext } from "back-end/types/organization";
+import { ApiReqContext } from "back-end/types/api";
+import { getFactTableMap } from "./FactTableModel";
 
 const impactEstimateSchema = new mongoose.Schema({
   id: String,
@@ -22,7 +24,7 @@ const impactEstimateSchema = new mongoose.Schema({
 export type ImpactEstimateDocument = mongoose.Document &
   ImpactEstimateInterface;
 
-export const ImpactEstimateModel = mongoose.model<ImpactEstimateDocument>(
+export const ImpactEstimateModel = mongoose.model<ImpactEstimateInterface>(
   "ImpactEstimate",
   impactEstimateSchema
 );
@@ -42,12 +44,12 @@ export async function createImpactEstimate(
 }
 
 export async function getImpactEstimate(
-  organization: string,
+  context: ReqContext | ApiReqContext,
   metric: string,
   numDays: number,
   segment?: string
 ): Promise<ImpactEstimateDocument | null> {
-  const metricObj = await getMetricById(metric, organization);
+  const metricObj = await getMetricById(context, metric);
   if (!metricObj) {
     throw new Error("Metric not found");
   }
@@ -56,27 +58,30 @@ export async function getImpactEstimate(
     return null;
   }
 
-  const datasource = await getDataSourceById(
+  const integration = await getIntegrationFromDatasourceId(
+    context,
     metricObj.datasource,
-    organization
+    true
   );
-  if (!datasource) {
-    throw new Error("Datasource not found");
+
+  if (!context.permissions.canRunMetricQueries(integration.datasource)) {
+    context.permissions.throwPermissionError();
   }
 
   let segmentObj: SegmentInterface | null = null;
   if (segment) {
-    segmentObj = await SegmentModel.findOne({
-      id: segment,
-      organization,
-      datasource: datasource.id,
-    });
+    segmentObj = await context.models.segments.getById(segment);
   }
 
-  const integration = getSourceIntegrationObject(datasource);
+  if (segmentObj?.datasource !== metricObj.datasource) {
+    segmentObj = null;
+  }
+
+  const factTableMap = await getFactTableMap(context);
 
   const conversionWindowHours =
-    metricObj.conversionWindowHours || DEFAULT_CONVERSION_WINDOW_HOURS;
+    getConversionWindowHours(metricObj.windowSettings) ||
+    DEFAULT_CONVERSION_WINDOW_HOURS;
 
   // Ignore last X hours of data since we need to give people time to convert
   const end = new Date();
@@ -92,10 +97,17 @@ export async function getImpactEstimate(
     metric: metricObj,
     includeByDate: true,
     segment: segmentObj || undefined,
+    factTableMap,
   });
 
-  const queryResponse = await integration.runMetricValueQuery(query);
-  const value = processMetricValueQueryResponse(queryResponse);
+  const queryResponse = await integration.runMetricValueQuery(
+    query,
+    // We're not storing a query in Mongo for this, so we don't support cancelling here
+    async () => {
+      // Ignore calls to setExternalId
+    }
+  );
+  const value = processMetricValueQueryResponse(queryResponse.rows);
 
   let daysWithData = numDays;
   if (value.dates && value.dates.length > 0) {
@@ -105,7 +117,7 @@ export async function getImpactEstimate(
   const conversionsPerDay = value.count / daysWithData;
 
   return createImpactEstimate({
-    organization,
+    organization: context.org.id,
     metric,
     segment: segment || undefined,
     conversionsPerDay: conversionsPerDay,

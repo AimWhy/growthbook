@@ -1,17 +1,37 @@
-import Link from "next/link";
 import { useRouter } from "next/router";
-import React, { FC, useState } from "react";
-import { FaAngleLeft, FaCloudDownloadAlt, FaCode, FaKey } from "react-icons/fa";
-import DeleteButton from "../../components/DeleteButton";
-import Button from "../../components/Button";
-import { useAuth } from "../../services/auth";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import DataSourceForm from "../../components/Settings/DataSourceForm";
-import EditDataSourceSettingsForm from "../../components/Settings/EditDataSourceSettingsForm";
-import LoadingOverlay from "../../components/LoadingOverlay";
-import Code from "../../components/Code";
-import { hasFileConfig } from "../../services/env";
-import usePermissions from "../../hooks/usePermissions";
+import React, { FC, useCallback, useState } from "react";
+import {
+  FaDatabase,
+  FaExclamationTriangle,
+  FaExternalLinkAlt,
+  FaKey,
+} from "react-icons/fa";
+import { DataSourceInterfaceWithParams } from "back-end/types/datasource";
+import { getDemoDatasourceProjectIdForOrganization } from "shared/demo-datasource";
+import { useFeatureIsOn } from "@growthbook/growthbook-react";
+import Link from "next/link";
+import { useAuth } from "@/services/auth";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import { hasFileConfig } from "@/services/env";
+import { DocLink, DocSection } from "@/components/DocLink";
+import { DataSourceInlineEditIdentifierTypes } from "@/components/Settings/EditDataSource/DataSourceInlineEditIdentifierTypes/DataSourceInlineEditIdentifierTypes";
+import { DataSourceInlineEditIdentityJoins } from "@/components/Settings/EditDataSource/DataSourceInlineEditIdentityJoins/DataSourceInlineEditIdentityJoins";
+import { ExperimentAssignmentQueries } from "@/components/Settings/EditDataSource/ExperimentAssignmentQueries/ExperimentAssignmentQueries";
+import { DataSourceViewEditExperimentProperties } from "@/components/Settings/EditDataSource/DataSourceExperimentProperties/DataSourceViewEditExperimentProperties";
+import { DataSourceJupyterNotebookQuery } from "@/components/Settings/EditDataSource/DataSourceJupypterQuery/DataSourceJupyterNotebookQuery";
+import ProjectBadges from "@/components/ProjectBadges";
+import DeleteButton from "@/components/DeleteButton/DeleteButton";
+import DataSourceForm from "@/components/Settings/DataSourceForm";
+import Code from "@/components/SyntaxHighlighting/Code";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import Modal from "@/components/Modal";
+import SchemaBrowser from "@/components/SchemaBrowser/SchemaBrowser";
+import DataSourceMetrics from "@/components/Settings/EditDataSource/DataSourceMetrics";
+import DataSourcePipeline from "@/components/Settings/EditDataSource/DataSourcePipeline/DataSourcePipeline";
+import { DeleteDemoDatasourceButton } from "@/components/DemoDataSourcePage/DemoDataSourcePage";
+import { useUser } from "@/services/UserContext";
+import PageHead from "@/components/Layout/PageHead";
+import usePermissionsUtil from "@/hooks/usePermissionsUtils";
 
 function quotePropertyName(name: string) {
   if (name.match(/^[a-zA-Z_][a-zA-Z0-9_]*$/)) {
@@ -21,13 +41,9 @@ function quotePropertyName(name: string) {
 }
 
 const DataSourcePage: FC = () => {
+  const permissionsUtil = usePermissionsUtil();
   const [editConn, setEditConn] = useState(false);
-  const [editSettings, setEditSettings] = useState(false);
-
-  const permissions = usePermissions();
-
-  const canEdit = !hasFileConfig();
-
+  const [viewSchema, setViewSchema] = useState(false);
   const router = useRouter();
 
   const {
@@ -38,41 +54,100 @@ const DataSourcePage: FC = () => {
   } = useDefinitions();
   const { did } = router.query as { did: string };
   const d = getDatasourceById(did);
-
   const { apiCall } = useAuth();
+  const { organization, hasCommercialFeature } = useUser();
+
+  const canDelete =
+    (d && permissionsUtil.canDeleteDataSource(d) && !hasFileConfig()) || false;
+
+  const canUpdateConnectionParams =
+    (d && permissionsUtil.canUpdateDataSourceParams(d) && !hasFileConfig()) ||
+    false;
+
+  const canUpdateDataSourceSettings =
+    (d && permissionsUtil.canUpdateDataSourceSettings(d) && !hasFileConfig()) ||
+    false;
+
+  const pipelineEnabled =
+    useFeatureIsOn("datasource-pipeline-mode") &&
+    hasCommercialFeature("pipeline-mode");
+
+  /**
+   * Update the data source provided.
+   * Each section is responsible for retaining the rest of the data source and editing its specific section.
+   */
+  const updateDataSourceSettings = useCallback(
+    async (dataSource: DataSourceInterfaceWithParams) => {
+      const updates = {
+        settings: dataSource.settings,
+      };
+      await apiCall(`/datasource/${dataSource.id}`, {
+        method: "PUT",
+        body: JSON.stringify(updates),
+      });
+      await mutateDefinitions({});
+    },
+    [mutateDefinitions, apiCall]
+  );
 
   if (error) {
-    return <div className="alert alert-danger">{error}</div>;
+    return (
+      <div className="container pagecontents">
+        <div className="alert alert-danger">{error}</div>
+      </div>
+    );
   }
   if (!ready) {
     return <LoadingOverlay />;
   }
   if (!d) {
     return (
-      <div className="alert alert-danger">
-        Datasource <code>{did}</code> does not exist.
+      <div className="container pagecontents">
+        <div className="alert alert-danger">
+          Datasource <code>{did}</code> does not exist.
+        </div>
       </div>
     );
   }
 
   const supportsSQL = d.properties?.queryLanguage === "sql";
   const supportsEvents = d.properties?.events || false;
-  const supportsImports = d.properties?.pastExperiments;
-
-  const joinTables = (d.settings?.queries?.identityJoins || []).filter(
-    (j) => j.query.length > 1
-  );
 
   return (
-    <div className="container mt-3 pagecontents">
-      <div className="mb-2">
-        <Link href="/datasources">
-          <a>
-            <FaAngleLeft /> All Data Sources
-          </a>
-        </Link>
-      </div>
-      <div className="row mb-3 align-items-center">
+    <div className="container pagecontents">
+      <PageHead
+        breadcrumb={[
+          { display: "Data Sources", href: "/datasources" },
+          { display: d.name },
+        ]}
+      />
+
+      {d.projects?.includes(
+        getDemoDatasourceProjectIdForOrganization(organization.id)
+      ) && (
+        <div className="alert alert-info mb-3 d-flex align-items-center mt-3">
+          <div className="flex-1">
+            This is part of our sample dataset. You can safely delete this once
+            you are done exploring.
+          </div>
+          <div style={{ width: 180 }} className="ml-2">
+            <DeleteDemoDatasourceButton
+              onDelete={() => router.push("/datasources")}
+              source="datasource"
+            />
+          </div>
+        </div>
+      )}
+
+      {d.decryptionError && (
+        <div className="alert alert-danger mb-2 d-flex justify-content-between align-items-center">
+          <strong>Error Decrypting Data Source Credentials.</strong>{" "}
+          <DocLink docSection="env_prod" className="btn btn-primary">
+            View instructions for fixing
+          </DocLink>
+        </div>
+      )}
+      <div className="row mb-2 align-items-center">
         <div className="col-auto">
           <h1 className="mb-0">{d.name}</h1>
         </div>
@@ -80,88 +155,110 @@ const DataSourcePage: FC = () => {
           <span className="badge badge-secondary">{d.type}</span>{" "}
           <span className="badge badge-success">connected</span>
         </div>
-        <div style={{ flex: 1 }} />
-        {canEdit && permissions.createDatasources && (
-          <div className="col-auto">
-            <DeleteButton
-              displayName={d.name}
-              text="Delete"
-              onClick={async () => {
-                await apiCall(`/datasource/${d.id}`, {
-                  method: "DELETE",
-                });
-                mutateDefinitions({});
-                router.push("/datasources");
-              }}
+      </div>
+      <div className="row mt-1 mb-3 align-items-center">
+        <div className="col-auto">
+          <div className="text-gray">{d.description}</div>
+        </div>
+      </div>
+      <div className="row mb-3 align-items-center">
+        <div className="col">
+          Projects:{" "}
+          {d?.projects?.length || 0 > 0 ? (
+            <ProjectBadges
+              resourceType="data source"
+              projectIds={d.projects}
+              className="badge-ellipsis align-middle"
             />
-          </div>
-        )}
+          ) : (
+            <ProjectBadges
+              resourceType="data source"
+              className="badge-ellipsis align-middle"
+            />
+          )}
+        </div>
       </div>
 
       <div className="row">
-        <div className="col-md-9">
-          <div className="row mb-3">
-            {canEdit && permissions.createDatasources && (
-              <div className="col-auto">
-                <a
-                  href="#"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setEditConn(true);
-                  }}
-                >
-                  <FaKey /> Edit Connection Info
-                </a>
+        <div className="col-md-12">
+          <div className="mb-3">
+            {(canUpdateConnectionParams ||
+              canUpdateDataSourceSettings ||
+              canDelete) && (
+              <div className="d-md-flex w-100 justify-content-between">
+                <div>
+                  {canUpdateConnectionParams ? (
+                    <button
+                      className="btn btn-outline-primary mr-2 mt-1 font-weight-bold"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setEditConn(true);
+                      }}
+                    >
+                      <FaKey /> Edit Connection Info
+                    </button>
+                  ) : null}
+                  <DocLink
+                    className="btn btn-outline-secondary mr-2 mt-1 font-weight-bold"
+                    docSection={d.type as DocSection}
+                    fallBackSection="datasources"
+                  >
+                    <FaExternalLinkAlt /> View Documentation
+                  </DocLink>
+                  {d?.properties?.supportsInformationSchema && (
+                    <button
+                      className="btn btn-outline-info mr-2 mt-1 font-weight-bold"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setViewSchema(true);
+                      }}
+                    >
+                      <FaDatabase /> View Schema Browser
+                    </button>
+                  )}
+                  <Link
+                    className="btn btn-outline-info mr-2 mt-1 font-weight-bold"
+                    href={`/datasources/queries/${did}`}
+                  >
+                    <FaDatabase /> View Queries
+                  </Link>
+                </div>
+
+                <div>
+                  {canDelete && (
+                    <DeleteButton
+                      displayName={d.name}
+                      className="font-weight-bold mt-1"
+                      text={`Delete "${d.name}" Datasource`}
+                      onClick={async () => {
+                        await apiCall(`/datasource/${d.id}`, {
+                          method: "DELETE",
+                        });
+                        mutateDefinitions({});
+                        router.push("/datasources");
+                      }}
+                    />
+                  )}
+                </div>
               </div>
             )}
-            {(supportsSQL || supportsEvents) &&
-              canEdit &&
-              permissions.editDatasourceSettings && (
-                <div className="col-auto">
-                  <a
-                    href="#"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setEditSettings(true);
-                    }}
-                  >
-                    <FaCode /> Edit Query Settings
-                  </a>
-                </div>
-              )}
           </div>
           {!d.properties?.hasSettings && (
             <div className="alert alert-info">
               This data source does not require any additional configuration.
             </div>
           )}
-          {supportsEvents && d?.settings?.events && (
+          {supportsEvents && (
             <>
-              <h3 className="mb-3">Query Settings</h3>
-              <table className="table appbox gbtable mb-5">
-                <tbody>
-                  <tr>
-                    <th>Experiment Event</th>
-                    <td>
-                      <code>{d.settings.events.experimentEvent || ""}</code>
-                    </td>
-                  </tr>
-                  <tr>
-                    <th>Experiment Id Property</th>
-                    <td>
-                      <code>
-                        {d.settings.events.experimentIdProperty || ""}
-                      </code>
-                    </td>
-                  </tr>
-                  <tr>
-                    <th>Variation Id Property</th>
-                    <td>
-                      <code>{d.settings.events.variationIdProperty || ""}</code>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+              <div className="my-5">
+                <DataSourceViewEditExperimentProperties
+                  dataSource={d}
+                  onSave={updateDataSourceSettings}
+                  onCancel={() => undefined}
+                  canEdit={canUpdateDataSourceSettings}
+                />
+              </div>
+
               {d.type === "mixpanel" && (
                 <div>
                   <h3>Mixpanel Tracking Instructions</h3>
@@ -176,12 +273,14 @@ const DataSourcePage: FC = () => {
 const growthbook = new GrowthBook({
   ...,
   trackingCallback: function(experiment, result) {
-    mixpanel.track(${JSON.stringify(d.settings.events.experimentEvent)}, {
+    mixpanel.track(${JSON.stringify(
+      d.settings?.events?.experimentEvent || "$experiment_started"
+    )}, {
       ${quotePropertyName(
-        d.settings.events.experimentIdProperty
+        d.settings?.events?.experimentIdProperty || "Experiment name"
       )}: experiment.key,
       ${quotePropertyName(
-        d.settings.events.variationIdProperty
+        d.settings?.events?.variationIdProperty || "Variant name"
       )}:  result.variationId,
       $source: 'growthbook'
     })
@@ -205,137 +304,71 @@ mixpanel.init('YOUR PROJECT TOKEN', {
           )}
           {supportsSQL && (
             <>
-              <div className="mb-4">
-                <h3>Identifier Types</h3>
-                <p>
-                  The different units you use to split traffic in an experiment.
-                </p>
-                {d.settings?.userIdTypes?.map(({ userIdType, description }) => (
-                  <div
-                    className="bg-white border mb-3 p-3 ml-3"
-                    key={userIdType}
-                  >
-                    <h4>{userIdType}</h4>
-                    {description && <div>{description}</div>}
-                  </div>
-                ))}
-              </div>
-              <div className="mb-4">
-                <h3>Experiment Assignment Queries</h3>
-                <p>
-                  Returns a record of which experiment variation was assigned to
-                  each user.
-                </p>
-                {d.settings.queries?.exposure?.map((e) => (
-                  <div className="bg-white border mb-3 ml-3" key={e.id}>
-                    <div className="px-3 pt-3">
-                      <h4>{e.name}</h4>
-                      {e.description && <p>{e.description}</p>}
-                      <div className="row">
-                        <div className="col-auto">
-                          <strong>Identifier: </strong>
-                          <code>{e.userIdType}</code>
-                        </div>
-                        <div className="col-auto">
-                          <strong>Dimension Columns: </strong>
-                          {e.dimensions.map((d, i) => (
-                            <React.Fragment key={i}>
-                              {i ? ", " : ""}
-                              <code key={d}>{d}</code>
-                            </React.Fragment>
-                          ))}
-                          {!e.dimensions.length && (
-                            <em className="text-muted">none</em>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    <Code
-                      language="sql"
-                      theme="light"
-                      code={e.query}
-                      containerClassName="mb-0"
-                      expandable={true}
-                    />
-                  </div>
-                ))}
-              </div>
-              {joinTables.length > 0 && d.settings?.userIdTypes?.length > 1 && (
-                <div className="mb-4">
-                  <h3>Identifier Join Tables</h3>
-                  <p>
-                    Joins different identifier types together when needed during
-                    experiment analysis.
-                  </p>
-                  {joinTables.map((t, i) => (
-                    <div className="bg-white border mb-3" key={i}>
-                      <h4 className="pt-3 px-3">{t.ids.join(", ")}</h4>
-                      <Code
-                        language="sql"
-                        theme="light"
-                        code={t.query}
-                        containerClassName="mb-0"
-                        expandable={true}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className="mb-4">
-                <h3>Jupyter Notebook Query Runner</h3>
-                <p>
-                  Tell us how to query this data source from within a Jupyter
-                  notebook environment.
-                </p>
-                {d.settings?.notebookRunQuery ? (
-                  <Code
-                    theme="light"
-                    code={d.settings.notebookRunQuery}
-                    language="python"
-                    expandable={true}
-                  />
-                ) : (
+              {d.dateUpdated === d.dateCreated &&
+                d?.settings?.schemaFormat !== "custom" && (
                   <div className="alert alert-info">
-                    No query runner defined, Jupyter export is disabled.
+                    <FaExclamationTriangle style={{ marginTop: "-2px" }} /> We
+                    have prefilled the identifiers and assignment queries below.
+                    These queries may require editing to fit your data
+                    structure.
                   </div>
                 )}
+              <div className="my-3 p-3 rounded border bg-white">
+                <DataSourceInlineEditIdentifierTypes
+                  onSave={updateDataSourceSettings}
+                  onCancel={() => undefined}
+                  dataSource={d}
+                  canEdit={canUpdateDataSourceSettings}
+                />
               </div>
+
+              {d.settings?.userIdTypes && d.settings.userIdTypes.length > 1 ? (
+                <div className="my-3 p-3 rounded border bg-white">
+                  <DataSourceInlineEditIdentityJoins
+                    dataSource={d}
+                    onSave={updateDataSourceSettings}
+                    onCancel={() => undefined}
+                    canEdit={canUpdateDataSourceSettings}
+                  />
+                </div>
+              ) : null}
+
+              <div className="my-3 p-3 rounded border bg-white">
+                <ExperimentAssignmentQueries
+                  dataSource={d}
+                  onSave={updateDataSourceSettings}
+                  onCancel={() => undefined}
+                  canEdit={canUpdateDataSourceSettings}
+                />
+              </div>
+              <div className="my-3 p-3 rounded border bg-white">
+                <DataSourceMetrics
+                  dataSource={d}
+                  canEdit={canUpdateDataSourceSettings}
+                />
+              </div>
+
+              <div className="my-3 p-3 rounded border bg-white">
+                <DataSourceJupyterNotebookQuery
+                  dataSource={d}
+                  onSave={updateDataSourceSettings}
+                  onCancel={() => undefined}
+                  canEdit={canUpdateDataSourceSettings}
+                />
+              </div>
+
+              {d.properties?.supportsWritingTables && pipelineEnabled ? (
+                <div className="my-3 p-3 rounded border bg-white">
+                  <DataSourcePipeline
+                    dataSource={d}
+                    onSave={updateDataSourceSettings}
+                    onCancel={() => undefined}
+                    canEdit={canUpdateDataSourceSettings}
+                  />
+                </div>
+              ) : null}
             </>
           )}
-        </div>
-        <div className="col-md-3">
-          {supportsImports &&
-            permissions.runQueries &&
-            permissions.createAnalyses && (
-              <div className="card">
-                <div className="card-body">
-                  <h2>Import Past Experiments</h2>
-                  <p>
-                    If you have past experiments already in your data source,
-                    you can import them to GrowthBook.
-                  </p>
-                  <Button
-                    color="outline-primary"
-                    onClick={async () => {
-                      const res = await apiCall<{ id: string }>(
-                        "/experiments/import",
-                        {
-                          method: "POST",
-                          body: JSON.stringify({
-                            datasource: d.id,
-                          }),
-                        }
-                      );
-                      if (res.id) {
-                        await router.push(`/experiments/import/${res.id}`);
-                      }
-                    }}
-                  >
-                    <FaCloudDownloadAlt /> Import
-                  </Button>
-                </div>
-              </div>
-            )}
         </div>
       </div>
 
@@ -352,18 +385,32 @@ mixpanel.init('YOUR PROJECT TOKEN', {
           }}
         />
       )}
-
-      {editSettings && (
-        <EditDataSourceSettingsForm
-          data={d}
-          source={"datasource-detail"}
-          onSuccess={() => {
-            mutateDefinitions({});
-          }}
-          onCancel={() => {
-            setEditSettings(false);
-          }}
-        />
+      {viewSchema && (
+        <Modal
+          trackingEventModalType=""
+          open={true}
+          size={"lg"}
+          close={() => setViewSchema(false)}
+          closeCta="Close"
+          header="Schema Browser"
+          overflowAuto={false}
+        >
+          <div className="d-flex row">
+            <p>
+              Explore the schemas, tables, and table metadata of your connected
+              datasource.
+            </p>
+            <div
+              className="border rounded w-100"
+              style={{
+                maxHeight: "calc(91vh - 196px)",
+                overflowY: "scroll",
+              }}
+            >
+              <SchemaBrowser datasource={d} />
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );

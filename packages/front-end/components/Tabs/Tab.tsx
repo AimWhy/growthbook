@@ -1,7 +1,7 @@
-import { FC, ReactElement } from "react";
+import { ReactNode, FC, ReactElement } from "react";
 
 const Tab: FC<{
-  display: string;
+  display: ReactNode;
   id?: string;
   count?: number;
   anchor?: string;
@@ -11,6 +11,7 @@ const Tab: FC<{
   className?: string;
   padding?: boolean;
   forceRenderOnFocus?: boolean;
+  children: ReactNode;
 }> = ({ children }) => {
   return <>{children}</>;
 };

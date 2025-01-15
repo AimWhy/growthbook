@@ -1,4 +1,34 @@
-export type ImplementationType = "visual" | "code" | "configuration" | "custom";
+import {
+  ExperimentPhase,
+  Variation,
+  MetricOverride,
+  ExperimentInterface,
+} from "back-end/src/validators/experiments";
+import { ExperimentRefVariation, FeatureInterface } from "./feature";
+
+export {
+  AttributionModel,
+  ImplementationType,
+  MetricOverride,
+  ExperimentStatus,
+  ExperimentType,
+  ExperimentPhase,
+  BanditStageType,
+  ExperimentAnalysisSettings,
+  ExperimentInterface,
+  ExperimentNotification,
+  ExperimentResultsType,
+  Screenshot,
+  Variation,
+} from "back-end/src/validators/experiments";
+
+export {
+  ExperimentTemplateInterface,
+  CreateTemplateProps,
+  UpdateTemplateProps,
+} from "back-end/src/routers/experiment-template/template.validators";
+
+export type ExperimentPhaseType = "ramp" | "main" | "holdout";
 
 export type DomChange = {
   selector: string;
@@ -7,30 +37,21 @@ export type DomChange = {
   value: string;
 };
 
-export interface Screenshot {
-  path: string;
-  width?: number;
-  height?: number;
-  description?: string;
-}
-
-export interface Variation {
-  name: string;
-  description?: string;
-  value?: string;
-  key?: string;
-  screenshots: Screenshot[];
+export type LegacyVariation = Variation & {
+  /** @deprecated */
   css?: string;
+  /** @deprecated */
   dom?: DomChange[];
+};
+
+export interface VariationWithIndex extends Variation {
+  index: number;
 }
 
-export interface ExperimentPhase {
-  dateStarted: Date;
-  dateEnded?: Date;
-  phase: "ramp" | "main" | "holdout";
-  reason: string;
-  coverage: number;
-  variationWeights: number[];
+export interface LegacyExperimentPhase extends ExperimentPhase {
+  /** @deprecated */
+  phase?: ExperimentPhaseType;
+  /** @deprecated */
   groups?: string[];
 }
 
@@ -42,53 +63,37 @@ export type ExperimentPhaseStringDates = Omit<
   dateEnded?: string;
 };
 
-export type ExperimentStatus = "draft" | "running" | "stopped";
+export type LegacyMetricOverride = MetricOverride & {
+  conversionWindowHours?: number;
+  conversionDelayHours?: number;
+};
 
-export interface ExperimentInterface {
-  id: string;
-  trackingKey: string;
-  organization: string;
-  project?: string;
-  owner: string;
-  datasource: string;
-  exposureQueryId: string;
-  implementation: ImplementationType;
-  /**
-   * @deprecated
-   */
-  userIdType?: "anonymous" | "user";
-  name: string;
-  dateCreated: Date;
-  dateUpdated: Date;
-  tags: string[];
-  description?: string;
+export interface LegacyExperimentInterface
+  extends Omit<
+    ExperimentInterface,
+    | "phases"
+    | "variations"
+    | "attributionModel"
+    | "releasedVariationId"
+    | "metricOverrides"
+    | "goalMetrics"
+    | "secondaryMetrics"
+    | "guardrailMetrics"
+  > {
   /**
    * @deprecated
    */
   observations?: string;
-  hypothesis?: string;
-  metrics: string[];
+  metricOverrides?: LegacyMetricOverride[];
+  attributionModel: ExperimentInterface["attributionModel"] | "allExposures";
+  variations: LegacyVariation[];
+  phases: LegacyExperimentPhase[];
+  releasedVariationId?: string;
+  metrics?: string[];
   guardrails?: string[];
-  activationMetric?: string;
-  segment?: string;
-  queryFilter?: string;
-  skipPartialData?: boolean;
-  removeMultipleExposures?: boolean;
-  autoAssign: boolean;
-  previewURL: string;
-  targetURLRegex: string;
-  variations: Variation[];
-  archived: boolean;
-  status: ExperimentStatus;
-  phases: ExperimentPhase[];
-  results?: "dnf" | "won" | "lost" | "inconclusive";
-  winner?: number;
-  analysis?: string;
-  data?: string;
-  lastSnapshotAttempt?: Date;
-  nextSnapshotAttempt?: Date;
-  autoSnapshots: boolean;
-  ideaSource?: string;
+  goalMetrics?: string[];
+  secondaryMetrics?: string[];
+  guardrailMetrics?: string[];
 }
 
 export type ExperimentInterfaceStringDates = Omit<
@@ -99,3 +104,47 @@ export type ExperimentInterfaceStringDates = Omit<
   dateUpdated: string;
   phases: ExperimentPhaseStringDates[];
 };
+
+export type Changeset = Partial<ExperimentInterface>;
+
+export type ExperimentTargetingData = Pick<
+  ExperimentPhaseStringDates,
+  | "condition"
+  | "coverage"
+  | "namespace"
+  | "seed"
+  | "variationWeights"
+  | "savedGroups"
+  | "prerequisites"
+> &
+  Pick<
+    ExperimentInterfaceStringDates,
+    | "hashAttribute"
+    | "fallbackAttribute"
+    | "hashVersion"
+    | "disableStickyBucketing"
+    | "bucketVersion"
+    | "minBucketVersion"
+    | "trackingKey"
+  > & {
+    newPhase: boolean;
+    reseed: boolean;
+  };
+
+export type LinkedFeatureState = "locked" | "live" | "draft" | "discarded";
+
+export type LinkedFeatureEnvState =
+  | "missing"
+  | "disabled-env"
+  | "disabled-rule"
+  | "active";
+
+export interface LinkedFeatureInfo {
+  feature: FeatureInterface;
+  state: LinkedFeatureState;
+  values: ExperimentRefVariation[];
+  valuesFrom: string;
+  inconsistentValues: boolean;
+  rulesAbove: boolean;
+  environmentStates: Record<string, LinkedFeatureEnvState>;
+}

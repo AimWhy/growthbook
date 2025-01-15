@@ -1,12 +1,10 @@
 module.exports = {
-  globals: {
-    "ts-jest": {
-      tsconfig: "./tsconfig.spec.json",
-    },
-  },
-  moduleFileExtensions: ["ts", "js"],
+  moduleFileExtensions: ["ts", "js", "node", "json"],
   transform: {
-    "^.+\\.(ts|tsx)$": "ts-jest",
+    "^.+\\.(ts|tsx)$": "@swc/jest",
   },
   testMatch: ["**/test/**/*.test.(ts|js)"],
+  moduleNameMapper: {
+    "^axios$": "axios/dist/axios.js",
+  },
 };

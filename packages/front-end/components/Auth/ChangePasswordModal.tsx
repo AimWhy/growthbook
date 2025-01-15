@@ -1,8 +1,8 @@
 import { FC } from "react";
 import { useForm } from "react-hook-form";
-import { useAuth } from "../../services/auth";
-import Field from "../Forms/Field";
-import Modal from "../Modal";
+import { useAuth } from "@/services/auth";
+import Field from "@/components/Forms/Field";
+import Modal from "@/components/Modal";
 
 const ChangePasswordModal: FC<{
   close: () => void;
@@ -17,13 +17,13 @@ const ChangePasswordModal: FC<{
 
   return (
     <Modal
+      trackingEventModalType=""
       header="Change Password"
       open={true}
       autoCloseOnSubmit={false}
       close={close}
       cta="Change Password"
-      successMessage="Password successfully changed. It will take effect the next time you
-      login."
+      successMessage="Password successfully changed"
       submit={form.handleSubmit(async (data) => {
         await apiCall("/auth/change-password", {
           method: "POST",

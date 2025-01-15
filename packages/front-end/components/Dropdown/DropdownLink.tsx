@@ -1,12 +1,13 @@
 import clsx from "clsx";
-import { FC } from "react";
+import { ReactNode, FC } from "react";
 
 const DropdownLink: FC<{
   closeOnClick?: boolean;
   active?: boolean;
   disabled?: boolean;
   className?: string;
-  onClick: () => void | Promise<void>;
+  onClick?: () => void | Promise<void>;
+  children: ReactNode;
 }> = ({
   active = false,
   disabled = false,
@@ -20,11 +21,15 @@ const DropdownLink: FC<{
         active,
         disabled,
       })}
-      href="#"
-      onClick={(e) => {
-        e.preventDefault();
-        onClick();
-      }}
+      role="button"
+      onClick={
+        onClick !== undefined
+          ? (e) => {
+              e.preventDefault();
+              onClick();
+            }
+          : undefined
+      }
     >
       {children}
     </a>

@@ -5,152 +5,71 @@ import {
   ChangeEventHandler,
   ReactElement,
 } from "react";
-import { useAuth } from "../../services/auth";
-import {
-  DataSourceInterfaceWithParams,
-  DataSourceType,
-  DataSourceParams,
-} from "back-end/types/datasource";
-import AthenaForm from "./AthenaForm";
-import PostgresForm from "./PostgresForm";
-import GoogleAnalyticsForm from "./GoogleAnalyticsForm";
-import SnowflakeForm from "./SnowflakeForm";
-import BigQueryForm from "./BigQueryForm";
-import ClickHouseForm from "./ClickHouseForm";
-import MixpanelForm from "./MixpanelForm";
-import track from "../../services/track";
-import Modal from "../Modal";
-import PrestoForm from "./PrestoForm";
-import MysqlForm from "./MysqlForm";
-import SelectField from "../Forms/SelectField";
-import Button from "../Button";
-import { getInitialSettings } from "../../services/datasources";
+import { DataSourceInterfaceWithParams } from "back-end/types/datasource";
+import { dataSourceConnections } from "@/services/eventSchema";
+import Button from "@/components/Button";
+import SelectField from "@/components/Forms/SelectField";
+import MultiSelectField from "@/components/Forms/MultiSelectField";
+import { getInitialSettings } from "@/services/datasources";
+import { DocLink, DocSection } from "@/components/DocLink";
+import { useAuth } from "@/services/auth";
+import track from "@/services/track";
+import Modal from "@/components/Modal";
+import ConnectionSettings from "@/components/Settings/ConnectionSettings";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import { ensureAndReturn } from "@/types/utils";
+import usePermissionsUtil from "@/hooks/usePermissionsUtils";
+import useProjectOptions from "@/hooks/useProjectOptions";
+import Tooltip from "@/components/Tooltip/Tooltip";
+import EditSchemaOptions from "./EditSchemaOptions";
 
-const typeOptions: {
-  type: DataSourceType;
-  display: string;
-  default: Partial<DataSourceParams>;
-}[] = [
-  {
-    type: "redshift",
-    display: "Redshift",
-    default: {
-      host: "",
-      port: 5439,
-      database: "",
-      user: "",
-      password: "",
-    },
-  },
-  {
-    type: "google_analytics",
-    display: "Google Analytics",
-    default: {
-      viewId: "",
-      customDimension: "1",
-      refreshToken: "",
-    },
-  },
-  {
-    type: "athena",
-    display: "AWS Athena",
-    default: {
-      bucketUri: "s3://",
-      region: "us-east-1",
-      database: "",
-      accessKeyId: "",
-      secretAccessKey: "",
-      workGroup: "primary",
-    },
-  },
-  {
-    type: "presto",
-    display: "PrestoDB or Trino",
-    default: {
-      engine: "presto",
-      host: "",
-      port: 8080,
-      username: "",
-      password: "",
-      catalog: "",
-      schema: "",
-    },
-  },
-  {
-    type: "snowflake",
-    display: "Snowflake",
-    default: {
-      account: "",
-      username: "",
-      password: "",
-    },
-  },
-  {
-    type: "postgres",
-    display: "Postgres",
-    default: {
-      host: "",
-      port: 5432,
-      database: "",
-      user: "",
-      password: "",
-    },
-  },
-  {
-    type: "mysql",
-    display: "MySQL or MariaDB",
-    default: {
-      host: "",
-      port: 3306,
-      database: "",
-      user: "",
-      password: "",
-    },
-  },
-  {
-    type: "bigquery",
-    display: "BigQuery",
-    default: {
-      privateKey: "",
-      clientEmail: "",
-      projectId: "",
-    },
-  },
-  {
-    type: "clickhouse",
-    display: "ClickHouse",
-    default: {
-      url: "",
-      port: 8123,
-      username: "",
-      password: "",
-      database: "",
-    },
-  },
-  {
-    type: "mixpanel",
-    display: "Mixpanel",
-    default: {
-      username: "",
-      secret: "",
-      projectId: "",
-    },
-  },
-];
+const typeOptions = dataSourceConnections;
 
 const DataSourceForm: FC<{
   data: Partial<DataSourceInterfaceWithParams>;
   existing: boolean;
   source: string;
-  onCancel: () => void;
+  onCancel?: () => void;
   onSuccess: (id: string) => Promise<void>;
   importSampleData?: () => Promise<void>;
-}> = ({ data, onSuccess, onCancel, source, existing, importSampleData }) => {
+  inline?: boolean;
+  cta?: string;
+  secondaryCTA?: ReactElement;
+}> = ({
+  data,
+  onSuccess,
+  onCancel,
+  source,
+  existing,
+  importSampleData,
+  inline,
+  cta = "Save",
+  secondaryCTA,
+}) => {
+  const { projects } = useDefinitions();
   const [dirty, setDirty] = useState(false);
   const [datasource, setDatasource] = useState<
-    Partial<DataSourceInterfaceWithParams>
-  >(null);
+    Partial<DataSourceInterfaceWithParams> | undefined
+  >();
   const [hasError, setHasError] = useState(false);
+  const permissionsUtil = usePermissionsUtil();
+
+  const permissionRequired = (project: string) => {
+    return existing
+      ? permissionsUtil.canUpdateDataSourceParams({
+          projects: [project],
+          type: datasource?.type,
+        })
+      : permissionsUtil.canCreateDataSource({
+          projects: [project],
+          type: datasource?.type,
+        });
+  };
+
+  const projectOptions = useProjectOptions(
+    permissionRequired,
+    datasource?.projects || []
+  );
 
   useEffect(() => {
     track("View Datasource Form", {
@@ -166,7 +85,7 @@ const DataSourceForm: FC<{
       };
       setDatasource(newValue);
     }
-  }, [data]);
+  }, [data, dirty]);
 
   if (!datasource) {
     return null;
@@ -184,7 +103,7 @@ const DataSourceForm: FC<{
       let id = data.id;
 
       // Update
-      if (data.id) {
+      if (id) {
         const res = await apiCall<{ status: number; message: string }>(
           `/datasource/${data.id}`,
           {
@@ -203,7 +122,10 @@ const DataSourceForm: FC<{
           body: JSON.stringify({
             ...datasource,
             settings: {
-              ...getInitialSettings("custom", datasource.params),
+              ...getInitialSettings(
+                "custom",
+                ensureAndReturn(datasource.params)
+              ),
               ...(datasource.settings || {}),
             },
           }),
@@ -228,125 +150,34 @@ const DataSourceForm: FC<{
     }
   };
 
-  const onChange: ChangeEventHandler<HTMLInputElement> = (e) => {
+  const onChange: ChangeEventHandler<HTMLInputElement | HTMLTextAreaElement> = (
+    e
+  ) => {
     setDatasource({
       ...datasource,
       [e.target.name]: e.target.value,
     });
     setDirty(true);
   };
-  const setParams = (params: { [key: string]: string }) => {
-    const newVal = {
+  const onManualChange = (name, value) => {
+    setDatasource({
       ...datasource,
-      params: {
-        ...datasource.params,
-        ...params,
-      },
-    };
-
-    setDatasource(newVal as Partial<DataSourceInterfaceWithParams>);
+      [name]: value,
+    });
     setDirty(true);
   };
-  const onParamChange: ChangeEventHandler<HTMLInputElement> = (e) => {
-    setParams({ [e.target.name]: e.target.value });
-  };
-  let connSettings: ReactElement | null = null;
-  if (datasource.type === "athena") {
-    connSettings = (
-      <AthenaForm
-        existing={existing}
-        onParamChange={onParamChange}
-        params={datasource.params}
-      />
-    );
-  } else if (datasource.type === "presto") {
-    connSettings = (
-      <PrestoForm
-        existing={existing}
-        onParamChange={onParamChange}
-        setParams={setParams}
-        params={datasource.params}
-      />
-    );
-  } else if (datasource.type === "redshift") {
-    connSettings = (
-      <PostgresForm
-        existing={existing}
-        onParamChange={onParamChange}
-        setParams={setParams}
-        params={datasource.params}
-      />
-    );
-  } else if (datasource.type === "postgres") {
-    connSettings = (
-      <PostgresForm
-        existing={existing}
-        onParamChange={onParamChange}
-        setParams={setParams}
-        params={datasource.params}
-      />
-    );
-  } else if (datasource.type === "mysql") {
-    connSettings = (
-      <MysqlForm
-        existing={existing}
-        onParamChange={onParamChange}
-        setParams={setParams}
-        params={datasource.params}
-      />
-    );
-  } else if (datasource.type === "google_analytics") {
-    connSettings = (
-      <GoogleAnalyticsForm
-        existing={existing}
-        onParamChange={onParamChange}
-        setParams={setParams}
-        params={datasource.params}
-        error={hasError}
-      />
-    );
-  } else if (datasource.type === "snowflake") {
-    connSettings = (
-      <SnowflakeForm
-        existing={existing}
-        onParamChange={onParamChange}
-        params={datasource.params}
-      />
-    );
-  } else if (datasource.type === "clickhouse") {
-    connSettings = (
-      <ClickHouseForm
-        existing={existing}
-        onParamChange={onParamChange}
-        setParams={setParams}
-        params={datasource.params}
-      />
-    );
-  } else if (datasource.type === "bigquery") {
-    connSettings = (
-      <BigQueryForm
-        setParams={setParams}
-        params={datasource.params}
-        onParamChange={onParamChange}
-      />
-    );
-  } else if (datasource.type === "mixpanel") {
-    connSettings = (
-      <MixpanelForm
-        existing={existing}
-        onParamChange={onParamChange}
-        params={datasource.params}
-      />
-    );
-  }
 
   return (
     <Modal
+      trackingEventModalType=""
+      inline={inline}
       open={true}
       submit={handleSubmit}
       close={onCancel}
       header={existing ? "Edit Data Source" : "Add Data Source"}
-      cta="Save"
+      cta={cta}
+      size="lg"
+      secondaryCTA={secondaryCTA}
     >
       {importSampleData && !datasource.type && (
         <div className="alert alert-info">
@@ -373,7 +204,7 @@ const DataSourceForm: FC<{
       )}
       <SelectField
         label="Data Source Type"
-        value={datasource.type}
+        value={datasource.type || typeOptions[0].type}
         onChange={(value) => {
           const option = typeOptions.filter((o) => o.type === value)[0];
           if (!option) return;
@@ -399,6 +230,14 @@ const DataSourceForm: FC<{
             label: o.display,
           };
         })}
+        helpText={
+          <DocLink
+            docSection={datasource.type as DocSection}
+            fallBackSection="datasources"
+          >
+            View documentation
+          </DocLink>
+        }
       />
       <div className="form-group">
         <label>Display Name</label>
@@ -411,7 +250,49 @@ const DataSourceForm: FC<{
           value={datasource.name}
         />
       </div>
-      {connSettings}
+      <div className="form-group">
+        <label>Description</label>
+        <textarea
+          className="form-control"
+          name="description"
+          onChange={onChange}
+          value={datasource.description}
+        />
+      </div>
+      {projects?.length > 0 && (
+        <div className="form-group">
+          <MultiSelectField
+            label={
+              <>
+                Projects{" "}
+                <Tooltip
+                  body={`The dropdown below has been filtered to only include projects where you have permission to ${
+                    existing ? "update" : "create"
+                  } Data Sources.`}
+                />
+              </>
+            }
+            placeholder="All projects"
+            value={datasource.projects || []}
+            options={projectOptions}
+            onChange={(v) => onManualChange("projects", v)}
+            customClassName="label-overflow-ellipsis"
+            helpText="Assign this data source to specific projects"
+          />
+        </div>
+      )}
+      <ConnectionSettings
+        datasource={datasource}
+        existing={existing}
+        hasError={hasError}
+        setDatasource={setDatasource}
+        setDirty={setDirty}
+      />
+      <EditSchemaOptions
+        datasource={datasource}
+        setDatasource={setDatasource}
+        setDirty={setDirty}
+      />
     </Modal>
   );
 };

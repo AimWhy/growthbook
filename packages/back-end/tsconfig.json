@@ -10,7 +10,14 @@
     "outDir": "dist",
     "typeRoots": ["node_modules/@types", "./typings"],
     "strictNullChecks": true,
-    "strictBindCallApply": true
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "baseUrl": "./",
+    "paths": {
+      "back-end/*": ["./*"]
+    },
+    "resolveJsonModule": true,
+    "plugins": [{ "transform": "typescript-transform-paths" }]
   },
   "include": ["src/**/*", "types/**/*.d.ts", "typings/**/*.d.ts"]
 }

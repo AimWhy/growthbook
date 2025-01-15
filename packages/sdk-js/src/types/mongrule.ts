@@ -12,7 +12,9 @@ type NotCondition = {
 };
 export type Operator =
   | "$in"
+  | "$inGroup"
   | "$nin"
+  | "$notInGroup"
   | "$gt"
   | "$gte"
   | "$lt"
@@ -25,7 +27,13 @@ export type Operator =
   | "$all"
   | "$not"
   | "$type"
-  | "$exists";
+  | "$exists"
+  | "$vgt"
+  | "$vgte"
+  | "$vlt"
+  | "$vlte"
+  | "$vne"
+  | "$veq";
 export type VarType =
   | "string"
   | "number"
@@ -36,7 +44,9 @@ export type VarType =
   | "undefined";
 export type OperatorConditionValue = {
   $in?: (string | number)[];
+  $inGroup?: string;
   $nin?: (string | number)[];
+  $notInGroup?: string;
   $gt?: number | string;
   $gte?: number | string;
   $lt?: number | string;
@@ -60,7 +70,8 @@ export type ConditionValue =
   // eslint-disable-next-line
   | Array<any>
   // eslint-disable-next-line
-  | Record<string, any>;
+  | Record<string, any>
+  | null;
 
 export type OperatorCondition = {
   [key: string]: ConditionValue;
@@ -72,6 +83,12 @@ export type ConditionInterface =
   | AndCondition
   | NotCondition
   | OperatorCondition;
+
+export type ParentConditionInterface = {
+  id: string;
+  condition: ConditionInterface;
+  gate?: boolean;
+};
 
 // eslint-disable-next-line
 export type TestedObj = Record<string, any>;

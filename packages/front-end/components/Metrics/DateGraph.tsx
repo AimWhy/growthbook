@@ -1,9 +1,6 @@
 import Link from "next/link";
-import styles from "./DateGraph.module.scss";
 import { MetricType } from "back-end/types/metric";
-import { FC, useState, useMemo, Fragment } from "react";
-import { formatConversionRate } from "../../services/metrics";
-import { date, getValidDate } from "../../services/dates";
+import { FC, Fragment, useEffect, useMemo, useState } from "react";
 import { ParentSizeModern } from "@visx/responsive";
 import { Group } from "@visx/group";
 import { GridColumns, GridRows } from "@visx/grid";
@@ -12,20 +9,122 @@ import { AxisBottom, AxisLeft } from "@visx/axis";
 import { AreaClosed, LinePath } from "@visx/shape";
 import { curveMonotoneX } from "@visx/curve";
 import {
-  TooltipWithBounds,
   Tooltip,
+  TooltipWithBounds,
   useTooltip,
   useTooltipInPortal,
 } from "@visx/tooltip";
-import setDay from "date-fns/setDay";
 import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
+import { date, getValidDate, getValidDateOffsetByUTC } from "shared/dates";
+import { addDays, setHours, setMinutes } from "date-fns";
+import cloneDeep from "lodash/cloneDeep";
+import { ScaleLinear } from "d3-scale";
+import { getMetricFormatter } from "@/services/metrics";
+import { useCurrency } from "@/hooks/useCurrency";
+import styles from "./DateGraph.module.scss";
 
-type TooltipData = { x: number; y: number; d: Datapoint };
 interface Datapoint {
   d: Date | number;
-  v: number;
-  s?: number;
-  c?: number;
+  v: number | null; // value
+  s?: number | null; // standard deviation
+  c?: number | null; // count
+  num?: number | null; // numerator
+  den?: number | null; // denominator
+  oor?: boolean; // out of range
+}
+
+type TooltipData = { x: number; y: number; d: Datapoint };
+
+function getDatapointFromDate(date: number, data: Datapoint[]) {
+  // find the closest datapoint to the date
+  const datapoint = data.reduce((acc, cur) => {
+    const curDate = getValidDate(cur.d).getTime();
+    const accDate = getValidDate(acc.d).getTime();
+    return Math.abs(curDate - date) < Math.abs(accDate - date) ? cur : acc;
+  });
+  // if it's within 1 day, return it
+  if (Math.abs(getValidDate(datapoint.d).getTime() - date) < 86400000) {
+    return datapoint;
+  }
+  return null;
+}
+
+function getTooltipDataFromDatapoint(
+  datapoint: Datapoint,
+  data: Datapoint[],
+  innerWidth: number,
+  yScale: ScaleLinear<unknown, unknown, never>
+) {
+  const index = data.indexOf(datapoint);
+  if (index === -1) {
+    return null;
+  }
+  const x = (data.length > 0 ? index / data.length : 0) * innerWidth;
+  const y = (yScale(datapoint.v ?? 0) ?? 0) as number;
+  return { x, y, d: datapoint };
+}
+
+function getDateFromX(
+  x: number,
+  data: Datapoint[],
+  width: number,
+  marginLeft: number,
+  marginRight: number
+) {
+  const innerWidth = width - marginRight - marginLeft + width / data.length - 1;
+  const px = x / innerWidth;
+  const index = Math.max(
+    Math.min(Math.round(px * data.length), data.length - 1),
+    0
+  );
+  const datapoint = data[index];
+  return getValidDate(datapoint.d).getTime();
+}
+
+function getTooltipContents(
+  d: Datapoint,
+  type: MetricType,
+  method: "sum" | "avg",
+  smoothBy: "day" | "week",
+  formatter: (value: number, options?: Intl.NumberFormatOptions) => string,
+  displayCurrency?: string
+) {
+  if (!d || d.oor) return null;
+  const formatterOptions = { currency: displayCurrency };
+  return (
+    <>
+      {type === "binomial" ? (
+        <div className={styles.val}>
+          <em>n</em>: {Math.round(d.v ?? 0)}
+          {smoothBy === "week" && (
+            <sub style={{ fontWeight: "normal", fontSize: 8 }}> smooth</sub>
+          )}
+        </div>
+      ) : (
+        <>
+          <div className={styles.val}>
+            {method === "sum" ? `Σ` : `μ`}:{" "}
+            {formatter(d.v as number, formatterOptions)}
+            {smoothBy === "week" && (
+              <sub style={{ fontWeight: "normal", fontSize: 8 }}> smooth</sub>
+            )}
+          </div>
+          {"s" in d && method === "avg" && (
+            <div className={styles.secondary}>
+              {`σ`}: {formatter(d.s || 0, formatterOptions)}
+              {smoothBy === "week" && (
+                <sub style={{ fontWeight: "normal", fontSize: 8 }}> smooth</sub>
+              )}
+            </div>
+          )}
+          <div className={styles.secondary}>
+            <em>n</em>: {d.c && Math.round(d.c)}
+          </div>
+        </>
+      )}
+      <div className={styles.date}>{date(d.d as Date)}</div>
+    </>
+  );
 }
 
 function addStddev(
@@ -36,28 +135,9 @@ function addStddev(
 ) {
   value = value ?? 0;
   stddev = stddev ?? 0;
-
   const err = stddev * num;
 
   return add ? value + err : Math.max(0, value - err);
-}
-
-function correctStddev(
-  n: number,
-  x: number,
-  sx: number,
-  m: number,
-  y: number,
-  sy: number
-) {
-  const s2x = Math.pow(sx, 2);
-  const s2y = Math.pow(sy, 2);
-  const t = n + m;
-
-  return Math.sqrt(
-    ((n - 1) * s2x + (m - 1) * s2y) / (t - 1) +
-      (n * m * Math.pow(x - y, 2)) / (t * (t - 1))
-  );
 }
 
 type ExperimentDisplayData = {
@@ -77,154 +157,136 @@ type ExperimentDisplayData = {
   };
 };
 
-const DateGraph: FC<{
+interface DateGraphProps {
   type: MetricType;
-  groupby?: "day" | "week";
+  smoothBy?: "day" | "week";
+  method?: "avg" | "sum";
   dates: Datapoint[];
   showStdDev?: boolean;
-  experiments?: Partial<ExperimentInterfaceStringDates>[];
+  experiments?: ExperimentInterfaceStringDates[];
   height?: number;
-}> = ({
+  margin?: [number, number, number, number];
+  formatter?: (value: number, options?: Intl.NumberFormatOptions) => string;
+  onHover?: (ret: { d: number | null }) => void;
+  hoverDate?: number | null;
+}
+
+const DateGraph: FC<DateGraphProps> = ({
   type,
+  smoothBy = "day",
+  method = "avg",
   dates,
-  groupby = "day",
   showStdDev = true,
   experiments = [],
   height = 220,
-}) => {
-  const data = useMemo(
-    () =>
-      dates
-        .reduce(
-          (
-            dates: {
-              key: number;
-              total: number;
-              stddev: number;
-              count: number;
-            }[],
-            { d, v, s, c }
-          ) => {
-            const key = (groupby === "day"
-              ? getValidDate(d)
-              : setDay(getValidDate(d), 0)
-            ).getTime();
+  margin = [15, 15, 30, 80],
+  formatter,
+  onHover,
+  hoverDate,
+}: DateGraphProps) => {
+  const [marginTop, marginRight, marginBottom, marginLeft] = margin;
 
-            const count = c || 1;
-            const total = v * count;
-            const stddev = s;
+  const displayCurrency = useCurrency();
+  const metricFormatter = formatter ?? getMetricFormatter(type);
+  const formatterOptions = { currency: displayCurrency };
 
-            for (let i = 0; i < dates.length; i++) {
-              if (dates[i].key === key) {
-                const clone = [...dates];
-                clone[i] = {
-                  key,
-                  total: dates[i].total + total,
-                  count: dates[i].count + count,
-                  stddev: correctStddev(
-                    dates[i].count,
-                    dates[i].total / dates[i].count,
-                    dates[i].stddev,
-                    count,
-                    v,
-                    stddev
-                  ),
-                };
-                return clone;
-              }
-            }
-
-            return [
-              ...dates,
-              {
-                key,
-                total,
-                count,
-                stddev,
-              },
-            ];
-          },
-          []
-        )
-        .map((row) => {
-          return {
-            d: row.key,
-            v: row.total / row.count,
-            s: row.stddev,
-            c: row.count,
-          };
-        }),
-    [dates, groupby]
-  );
-
-  const getTooltipData = (mx: number, width: number, yScale): TooltipData => {
-    const innerWidth = width - margin[1] - margin[3] + width / data.length - 1;
-    const px = mx / innerWidth;
-    const index = Math.max(
-      Math.min(Math.round(px * data.length), data.length - 1),
-      0
-    );
-    const d = data[index];
-    const x = (data.length > 0 ? index / data.length : 0) * innerWidth;
-    const y = yScale(type === "binomial" ? d.c : d.v) ?? 0;
-    return { x, y, d };
-  };
-
-  const getTooltipContents = (d: Datapoint) => {
-    return (
-      <>
-        {type === "binomial" ? (
-          <div className={styles.val}>{d.c.toLocaleString()}</div>
-        ) : (
-          <>
-            <div className={styles.val}>
-              &mu;: {formatConversionRate(type, d.v as number)}
-            </div>
-            {"s" in d && (
-              <div className={styles.secondary}>
-                &sigma;: {formatConversionRate(type, d.s)}
-              </div>
-            )}
-            <div className={styles.secondary}>
-              <em>n</em>: {d.c.toLocaleString()}
-            </div>
-          </>
-        )}
-        <div className={styles.date}>{date(d.d as Date)}</div>
-      </>
-    );
-  };
-
-  const { containerRef, containerBounds } = useTooltipInPortal({
-    scroll: true,
-    detectBounds: true,
-  });
-
-  const {
-    showTooltip,
-    hideTooltip,
-    tooltipOpen,
-    tooltipData,
-    tooltipLeft = 0,
-    tooltipTop = 0,
-  } = useTooltip<TooltipData>();
-
-  const margin = [15, 15, 30, 80];
-  const min = Math.min(...data.map((d) => d.d));
-  const max = Math.max(...data.map((d) => d.d));
-
-  const [toolTipTimer, setToolTipTimer] = useState<null | ReturnType<
-    typeof setTimeout
-  >>(null);
   const [
     highlightExp,
     setHighlightExp,
   ] = useState<null | ExperimentDisplayData>(null);
 
+  const data = useMemo(() => {
+    let sortedDates = cloneDeep(dates).sort(
+      (a, b) => getValidDate(a.d).getTime() - getValidDate(b.d).getTime()
+    );
+
+    // Force a common date format using the last date
+    const lastDate = getValidDate(sortedDates[sortedDates.length - 1].d);
+    const desiredHour = lastDate.getUTCHours();
+    const desiredMinute = lastDate.getUTCMinutes();
+    sortedDates = sortedDates.map((d) => {
+      let date = getValidDateOffsetByUTC(d.d);
+      date = setMinutes(setHours(date, desiredHour), desiredMinute);
+      d.d = date;
+      return d;
+    });
+
+    // Insert missing dates
+    const filledDates: Datapoint[] = [];
+    for (let i = 0; i < sortedDates.length; i++) {
+      filledDates.push(sortedDates[i]);
+      if (i < sortedDates.length - 1) {
+        const currentDate = getValidDate(sortedDates[i].d);
+        const nextDate = getValidDate(sortedDates[i + 1].d);
+        let expectedDate = addDays(new Date(currentDate), 1);
+
+        while (expectedDate < nextDate) {
+          filledDates.push({
+            d: expectedDate,
+            v: null,
+            s: null,
+            c: 0,
+          });
+          expectedDate = addDays(expectedDate, 1);
+        }
+      }
+    }
+
+    // Calculate data points
+    return filledDates.map((row, i) => {
+      const key = getValidDate(row.d).getTime();
+      let value =
+        row.v === null ? null : method === "avg" ? row.v : row.v * (row.c ?? 1);
+      let stddev = row.s === null ? null : method === "avg" ? row.s : 0;
+      const count = row.c === null ? null : row.c ?? 1;
+      const oor = row.oor;
+
+      if (smoothBy === "week") {
+        // get 7 day average (or < 7 days if at beginning of data)
+        const windowedDates = filledDates.slice(Math.max(i - 6, 0), i + 1);
+        const filteredWindowedDates = windowedDates.filter(
+          (d) => d.v !== null && d.s !== null
+        );
+        const days = filteredWindowedDates.length;
+        const sumValue = filteredWindowedDates.reduce((acc, cur) => {
+          if (cur.v === null) return null;
+          return acc + (method === "avg" ? cur.v : cur.v * (cur.c ?? 1));
+        }, 0);
+        const sumStddev = filteredWindowedDates.reduce((acc, cur) => {
+          if (cur.s === null) return null;
+          return acc + (method === "avg" ? cur.s ?? 0 : 0);
+        }, 0);
+        if (sumValue !== null && sumStddev !== null) {
+          value = days ? sumValue / days : 0;
+          stddev = days ? sumStddev / days : 0;
+        }
+        if (row.v === null || row.s === null) {
+          value = null;
+          stddev = null;
+        }
+      }
+
+      const ret: Datapoint = {
+        d: key,
+        v: value,
+        s: stddev,
+        c: count,
+      };
+      if (oor) {
+        ret.oor = true;
+      }
+      if (smoothBy === "week" && i < 6) {
+        ret.oor = true;
+      }
+      return ret;
+    });
+  }, [dates, smoothBy, method]);
+
+  const toolTipDelay = 600;
+
   // in future we might want to mark the different phases or percent traffic in this as different colors
   const experimentDates: ExperimentDisplayData[] = [];
   const bands = new Map();
-  const toolTipDelay = 600;
 
   if (experiments && experiments.length > 0) {
     experiments.forEach((e) => {
@@ -248,16 +310,15 @@ const DateGraph: FC<{
         } else if (e.results === "lost") {
           expLines.color = "rgb(199,51,51)";
         }
-        // get the earliest start date, and the latest end date - this might not be what we want,
-        // we may want to only look at the 'main' phase, or ignore the holdouts.
+        // get the earliest start date, and the latest end date.
         if (e?.phases) {
           e?.phases.forEach((p) => {
             if (!expLines.dateStarted) expLines.dateStarted = p.dateStarted;
-            else if (p.dateStarted < expLines.dateStarted) {
+            else if (p.dateStarted && p.dateStarted < expLines.dateStarted) {
               expLines.dateStarted = p.dateStarted;
             }
             if (!expLines.dateEnded) expLines.dateEnded = p.dateEnded;
-            else if (p.dateEnded > expLines.dateEnded) {
+            else if (p.dateEnded && p.dateEnded > expLines.dateEnded) {
               expLines.dateEnded = p.dateEnded;
             }
           });
@@ -274,6 +335,8 @@ const DateGraph: FC<{
     });
     // get all the experiments in order of start date.
     experimentDates.sort((a, b) => {
+      if (!a.dateStarted || !b.dateStarted) return 0;
+
       return a.dateStarted > b.dateStarted ? 1 : -1;
     });
 
@@ -290,7 +353,7 @@ const DateGraph: FC<{
         } else {
           let fits = true;
           for (let i = 0; i < curBands.length; i++) {
-            if (ed.dateStarted < curBands[i].dateEnded) {
+            if (ed.dateStarted && ed.dateStarted < curBands[i].dateEnded) {
               // it will not fit, there is an overlapping test.
               fits = false;
             }
@@ -311,54 +374,136 @@ const DateGraph: FC<{
     });
   }
 
+  const { containerRef, containerBounds } = useTooltipInPortal({
+    scroll: true,
+    detectBounds: true,
+  });
+
+  const width = (containerBounds?.width || 0) + marginRight + marginLeft;
+  const dateNums = data.map((d) => getValidDate(d.d).getTime());
+  const min = Math.min(...dateNums);
+  const max = Math.max(...dateNums);
+  const yMax = height - marginTop - marginBottom;
+  const xMax = containerBounds?.width || 0;
+  const numXTicks = width > 768 ? 7 : 4;
+  const numYTicks = 5;
+  const axisHeight = 30;
+  const minGraphHeight = 100;
+  const expBarHeight = 10;
+  const expBarMargin = 4;
+  const expHeight = bands.size * (expBarHeight + expBarMargin);
+  let graphHeight = yMax - expHeight;
+  if (graphHeight < minGraphHeight) {
+    height += minGraphHeight - (yMax - expHeight);
+    graphHeight = minGraphHeight;
+  }
+
+  const xScale = useMemo(
+    () =>
+      scaleTime({
+        domain: [min, max],
+        range: [0, xMax],
+        round: true,
+      }),
+    [min, max, xMax]
+  );
+
+  const yScale = useMemo(
+    () =>
+      scaleLinear<number>({
+        domain: [
+          0,
+          Math.max(
+            ...data.map((d) =>
+              Math.min((d.v ?? 0) * 2, (d.v ?? 0) + (d.s ?? 0) * 2)
+            )
+          ),
+        ],
+        range: [graphHeight, 0],
+        round: true,
+      }),
+    [data, graphHeight]
+  );
+
+  const {
+    showTooltip,
+    hideTooltip,
+    tooltipOpen,
+    tooltipData,
+    tooltipLeft = 0,
+    tooltipTop = 0,
+  } = useTooltip<TooltipData>();
+
+  const [toolTipTimer, setToolTipTimer] = useState<
+    undefined | ReturnType<typeof setTimeout>
+  >();
+
+  useEffect(() => {
+    if (!hoverDate) {
+      hideTooltip();
+      return;
+    }
+    const datapoint = getDatapointFromDate(hoverDate, data);
+    if (!datapoint || datapoint.oor || datapoint.v === null) {
+      hideTooltip();
+      return;
+    }
+    const innerWidth =
+      width - marginLeft - marginRight + width / data.length - 1;
+    const tooltipData = getTooltipDataFromDatapoint(
+      datapoint,
+      data,
+      innerWidth,
+      yScale
+    );
+    if (!tooltipData) {
+      hideTooltip();
+      return;
+    }
+    showTooltip({
+      tooltipLeft: tooltipData.x,
+      tooltipTop: tooltipData.y,
+      tooltipData: tooltipData,
+    });
+  }, [
+    hoverDate,
+    data,
+    width,
+    marginLeft,
+    marginRight,
+    yScale,
+    showTooltip,
+    hideTooltip,
+  ]);
+
   return (
     <ParentSizeModern style={{ position: "relative" }}>
       {({ width }) => {
-        const yMax = height - margin[0] - margin[2];
-        const xMax = width - margin[1] - margin[3];
-        const numXTicks = width > 768 ? 7 : 4;
-        const numYTicks = 5;
-        const axisHeight = 30;
-        const minGraphHeight = 100;
-        const expBarHeight = 10;
-        const expBarMargin = 4;
-        const expHeight = bands.size * (expBarHeight + expBarMargin);
-        let graphHeight = yMax - expHeight;
-        if (graphHeight < minGraphHeight) {
-          height += minGraphHeight - (yMax - expHeight);
-          graphHeight = minGraphHeight;
-        }
+        const xMax = width - marginRight - marginLeft;
 
-        const xScale = scaleTime({
-          domain: [min, max],
-          range: [0, xMax],
-          round: true,
-        });
-        const yScale = scaleLinear<number>({
-          domain: [
-            0,
-            Math.max(
-              ...data.map((d) =>
-                type === "binomial"
-                  ? d.c
-                  : Math.min(d.v * 2, d.v + (d.s ?? 0) * 2)
-              )
-            ),
-          ],
-          range: [graphHeight, 0],
-          round: true,
-        });
-
-        const handlePointer = (event: React.PointerEvent<HTMLDivElement>) => {
+        const handlePointerMove = (
+          event: React.PointerEvent<HTMLDivElement>
+        ) => {
           // coordinates should be relative to the container in which Tooltip is rendered
           const containerX =
             ("clientX" in event ? event.clientX : 0) - containerBounds.left;
-          const data = getTooltipData(containerX, width, yScale);
-          showTooltip({
-            tooltipLeft: data.x,
-            tooltipTop: data.y,
-            tooltipData: data,
-          });
+          const date = getDateFromX(
+            containerX,
+            data,
+            width,
+            marginLeft,
+            marginRight
+          );
+          if (onHover) {
+            onHover({ d: date });
+          }
+        };
+
+        const handlePointerLeave = () => {
+          hideTooltip();
+          if (onHover) {
+            onHover({ d: null });
+          }
         };
 
         return (
@@ -369,11 +514,11 @@ const DateGraph: FC<{
               style={{
                 width: xMax,
                 height: graphHeight,
-                marginLeft: margin[3],
-                marginTop: margin[0],
+                marginLeft: marginLeft,
+                marginTop: marginTop,
               }}
-              onPointerMove={handlePointer}
-              onPointerLeave={hideTooltip}
+              onPointerMove={handlePointerMove}
+              onPointerLeave={handlePointerLeave}
             >
               {tooltipOpen && (
                 <>
@@ -393,18 +538,52 @@ const DateGraph: FC<{
                     className={styles.tooltip}
                     unstyled={true}
                   >
-                    {getTooltipContents(tooltipData.d)}
+                    {tooltipData?.d &&
+                      getTooltipContents(
+                        tooltipData.d,
+                        type,
+                        method,
+                        smoothBy,
+                        metricFormatter,
+                        displayCurrency
+                      )}
                   </TooltipWithBounds>
                 </>
               )}
             </div>
             <svg width={width} height={height}>
-              <Group left={margin[3]} top={margin[0]}>
-                <GridRows scale={yScale} width={xMax} numTicks={numYTicks} />
+              <defs>
+                <pattern
+                  id="stripe-pattern"
+                  patternUnits="userSpaceOnUse"
+                  width="6"
+                  height="6"
+                  patternTransform="rotate(45)"
+                >
+                  <rect fill="#cccccc" width="2.5" height="6" />
+                  <rect fill="#d6d6d6" x="2.5" width="3.5" height="6" />
+                </pattern>
+                <clipPath id="date-graph-clip">
+                  <rect
+                    x={0}
+                    y={0}
+                    width={width - margin[1] - margin[3]}
+                    height={height - margin[0] - margin[2]}
+                  />
+                </clipPath>
+              </defs>
+              <Group left={marginLeft} top={marginTop}>
+                <GridRows
+                  scale={yScale}
+                  width={xMax}
+                  numTicks={numYTicks}
+                  stroke="var(--border-color-200)"
+                />
                 <GridColumns
                   scale={xScale}
                   height={graphHeight}
                   numTicks={numXTicks}
+                  stroke="var(--border-color-200)"
                 />
                 {experiments && (
                   <>
@@ -414,11 +593,17 @@ const DateGraph: FC<{
                           <rect
                             key={e.id}
                             fill={e.color}
-                            x={xScale(new Date(e.dateStarted).getTime())}
+                            x={
+                              e.dateStarted
+                                ? xScale(new Date(e.dateStarted).getTime())
+                                : 0
+                            }
                             y={0}
                             width={
-                              xScale(new Date(e.dateEnded).getTime()) -
-                              xScale(new Date(e.dateStarted).getTime())
+                              e.dateEnded && e.dateStarted
+                                ? xScale(new Date(e.dateEnded).getTime()) -
+                                  xScale(new Date(e.dateStarted).getTime())
+                                : 0
                             }
                             style={{ opacity: 0.15 }}
                             height={graphHeight}
@@ -437,72 +622,161 @@ const DateGraph: FC<{
                     })}
                   </>
                 )}
-                {showStdDev && type !== "binomial" && (
-                  <>
-                    <AreaClosed
-                      yScale={yScale}
-                      data={data}
-                      x={(d) => xScale(d.d) ?? 0}
-                      y0={(d) => yScale(addStddev(d.v, d.s, 2, false))}
-                      y1={(d) => yScale(addStddev(d.v, d.s, 2, true))}
-                      fill={"#dddddd"}
-                      opacity={0.5}
-                      curve={curveMonotoneX}
-                    />
-                    <AreaClosed
-                      yScale={yScale}
-                      data={data}
-                      x={(d) => xScale(d.d) ?? 0}
-                      y0={(d) => yScale(addStddev(d.v, d.s, 1, false))}
-                      y1={(d) => yScale(addStddev(d.v, d.s, 1, true))}
-                      fill={"#cccccc"}
-                      opacity={0.5}
-                      curve={curveMonotoneX}
-                    />
-                  </>
-                )}
 
-                <LinePath
-                  data={data}
-                  x={(d) => xScale(d.d) ?? 0}
-                  y={(d) => yScale(type === "binomial" ? d.c : d.v) ?? 0}
-                  stroke={"#8884d8"}
-                  strokeWidth={2}
-                  curve={curveMonotoneX}
-                />
+                <Group clipPath="url(#date-graph-clip)">
+                  {showStdDev && type !== "binomial" && (
+                    <>
+                      <AreaClosed
+                        yScale={yScale}
+                        data={data}
+                        x={(d) => xScale(d.d) ?? 0}
+                        y0={(d) =>
+                          yScale(addStddev(d.v ?? 0, d.s ?? 0, 2, false))
+                        }
+                        y1={(d) =>
+                          yScale(addStddev(d.v ?? 0, d.s ?? 0, 2, true))
+                        }
+                        fill={"#dddddd"}
+                        opacity={0.5}
+                        defined={(d) => d.s !== null && !d?.oor}
+                        curve={curveMonotoneX}
+                      />
+                      <AreaClosed
+                        yScale={yScale}
+                        data={data}
+                        x={(d) => xScale(d.d) ?? 0}
+                        y0={(d) =>
+                          yScale(addStddev(d.v ?? 0, d.s ?? 0, 1, false))
+                        }
+                        y1={(d) =>
+                          yScale(addStddev(d.v ?? 0, d.s ?? 0, 1, true))
+                        }
+                        fill={"#cccccc"}
+                        opacity={0.5}
+                        defined={(d) => d.s !== null && !d?.oor}
+                        curve={curveMonotoneX}
+                      />
+
+                      {smoothBy === "week" && (
+                        <>
+                          <AreaClosed
+                            yScale={yScale}
+                            data={data}
+                            x={(d) => xScale(d.d) ?? 0}
+                            y0={(d) =>
+                              yScale(addStddev(d.v ?? 0, d.s ?? 0, 2, false))
+                            }
+                            y1={(d) =>
+                              yScale(addStddev(d.v ?? 0, d.s ?? 0, 2, true))
+                            }
+                            fill={"url(#stripe-pattern)"}
+                            opacity={0.3}
+                            defined={(d, i) =>
+                              d.s !== null && !!(d?.oor || data?.[i - 1]?.oor)
+                            }
+                            curve={curveMonotoneX}
+                          />
+                          <AreaClosed
+                            yScale={yScale}
+                            data={data}
+                            x={(d) => xScale(d.d) ?? 0}
+                            y0={(d) =>
+                              yScale(addStddev(d.v ?? 0, d.s ?? 0, 1, false))
+                            }
+                            y1={(d) =>
+                              yScale(addStddev(d.v ?? 0, d.s ?? 0, 1, true))
+                            }
+                            fill={"url(#stripe-pattern)"}
+                            opacity={0.3}
+                            defined={(d, i) =>
+                              d.s !== null && !!(d?.oor || data?.[i - 1]?.oor)
+                            }
+                            curve={curveMonotoneX}
+                          />
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  <LinePath
+                    data={data}
+                    x={(d) => xScale(d.d) ?? 0}
+                    y={(d) => yScale(d.v ?? 0) ?? 0}
+                    stroke={"#8884d8"}
+                    strokeWidth={2}
+                    curve={curveMonotoneX}
+                    defined={(d) => d.v !== null && !d?.oor}
+                  />
+                  {smoothBy === "week" && (
+                    <LinePath
+                      data={data}
+                      x={(d) => xScale(d.d) ?? 0}
+                      y={(d) => yScale(d.v ?? 0) ?? 0}
+                      stroke={"#8884d8"}
+                      opacity={0.5}
+                      strokeDasharray={"2,5"}
+                      strokeWidth={2}
+                      curve={curveMonotoneX}
+                      defined={(d, i) =>
+                        d.v !== null && !!(d?.oor || data?.[i - 1]?.oor)
+                      }
+                    />
+                  )}
+                </Group>
 
                 <AxisBottom
                   top={graphHeight}
                   scale={xScale}
+                  stroke={"var(--text-color-table)"}
                   numTicks={numXTicks}
+                  tickLabelProps={() => ({
+                    fill: "var(--text-color-table)",
+                    fontSize: 11,
+                    textAnchor: "start",
+                    dx: -15,
+                  })}
                   tickFormat={(d) => {
-                    return date(d as Date);
+                    return (d as Date).toLocaleDateString("en-us", {
+                      month: "short",
+                      day: "numeric",
+                    });
                   }}
                 />
                 <AxisLeft
                   scale={yScale}
+                  stroke={"var(--text-color-table)"}
                   numTicks={numYTicks}
+                  tickLabelProps={() => ({
+                    fill: "var(--text-color-table)",
+                    fontSize: 11,
+                    textAnchor: "end",
+                    dx: -2,
+                    dy: 2,
+                  })}
                   tickFormat={(v) =>
                     type === "binomial"
                       ? (v as number).toLocaleString()
-                      : formatConversionRate(type, v as number)
+                      : metricFormatter(v as number, formatterOptions)
                   }
                 />
               </Group>
               {experiments && (
                 <Group
-                  left={margin[3]}
-                  top={graphHeight + axisHeight + margin[0]}
+                  left={marginLeft}
+                  top={graphHeight + axisHeight + marginTop}
                 >
                   {experimentDates.map((e, i) => {
                     const rectWidth =
-                      xScale(new Date(e.dateEnded).getTime()) -
-                      xScale(new Date(e.dateStarted).getTime());
+                      e.dateEnded && e.dateStarted
+                        ? xScale(new Date(e.dateEnded).getTime()) -
+                          xScale(new Date(e.dateStarted).getTime())
+                        : 0;
                     e.tipPosition = {
                       top: height,
-                      left:
-                        xScale(new Date(e.dateStarted).getTime()) +
-                        Math.min(150, rectWidth / 2),
+                      left: e.dateStarted
+                        ? xScale(new Date(e.dateStarted).getTime()) +
+                          Math.min(150, rectWidth / 2)
+                        : 0,
                     };
 
                     // as this is loading, xScale may return negative numbers, which throws errors in <rect>.
@@ -511,8 +785,12 @@ const DateGraph: FC<{
                       <rect
                         key={i}
                         fill={e.color}
-                        x={xScale(new Date(e.dateStarted).getTime())}
-                        y={e.band * (expBarHeight + expBarMargin)}
+                        x={
+                          e.dateStarted
+                            ? xScale(new Date(e.dateStarted).getTime())
+                            : 0
+                        }
+                        y={e.band ? e.band * (expBarHeight + expBarMargin) : 0}
                         width={rectWidth}
                         style={{ opacity: e.opacity }}
                         rx={4}
@@ -535,8 +813,8 @@ const DateGraph: FC<{
             </svg>
             {highlightExp && (
               <Tooltip
-                top={highlightExp.tipPosition.top}
-                left={highlightExp.tipPosition.left}
+                top={highlightExp.tipPosition?.top}
+                left={highlightExp.tipPosition?.left}
                 className={styles.tooltip}
                 style={{
                   position: "absolute",
@@ -557,15 +835,20 @@ const DateGraph: FC<{
                   style={{ color: "#fff", fontSize: "12px", maxWidth: "250px" }}
                 >
                   <p className="mb-1">
-                    <Link href={`/experiment/${highlightExp.id}`}>
-                      <a style={{ color: "#b3e8ff", fontSize: "12px" }}>
-                        <strong>{highlightExp.name}</strong>
-                      </a>
+                    <Link
+                      href={`/experiment/${highlightExp.id}`}
+                      style={{ color: "#b3e8ff", fontSize: "12px" }}
+                    >
+                      <strong>{highlightExp.name}</strong>
                     </Link>
                   </p>
                   <p className="mb-1">
-                    {date(highlightExp.dateStarted)} -{" "}
-                    {highlightExp.status === "running"
+                    {highlightExp.dateStarted
+                      ? date(highlightExp.dateStarted)
+                      : ""}{" "}
+                    -{" "}
+                    {highlightExp.status === "running" ||
+                    !highlightExp.dateEnded
                       ? ""
                       : date(highlightExp.dateEnded)}
                   </p>

@@ -1,11 +1,16 @@
 import { FeatureInterface } from "back-end/types/feature";
-import Modal from "../Modal";
-import ControlledTabs from "../Tabs/ControlledTabs";
-import Tab from "../Tabs/Tab";
-import Code from "../Code";
 import { useState } from "react";
-import { Language } from "../Code";
-import CodeSnippetModal from "./CodeSnippetModal";
+import { SDKLanguage } from "back-end/types/sdk-connection";
+import Modal from "@/components/Modal";
+import { DocLink } from "@/components/DocLink";
+import BooleanFeatureCodeSnippet from "@/components/SyntaxHighlighting/Snippets/BooleanFeatureCodeSnippet";
+import MultivariateFeatureCodeSnippet from "@/components/SyntaxHighlighting/Snippets/MultivariateFeatureCodeSnippet";
+import {
+  LanguageFilter,
+  languageMapping,
+} from "./SDKConnections/SDKLanguageLogo";
+import SDKLanguageSelector from "./SDKConnections/SDKLanguageSelector";
+import InitialSDKConnectionForm from "./SDKConnections/InitialSDKConnectionForm";
 
 export interface Props {
   feature: FeatureInterface;
@@ -13,210 +18,74 @@ export interface Props {
   close: () => void;
 }
 
-function rubySymbol(name: string): string {
-  return name.match(/[^a-zA-Z0-9_]+/) ? `'${name}'` : `:${name}`;
-}
-
 export default function FeatureImplementationModal({
   feature,
   close,
   first = true,
 }: Props) {
-  const [language, setLanguage] = useState<Language>("javascript");
+  const [language, setLanguage] = useState<SDKLanguage>("javascript");
   const [fullSnippet, setFullSnippet] = useState(false);
-  const codeSamples: {
-    id: string;
-    display: string;
-    language: Language;
-    boolean: string;
-    value: string;
-    docs: string;
-  }[] = [
-    {
-      id: "react",
-      display: "React",
-      language: "tsx",
-      boolean: `import { useFeature, IfFeatureEnabled } from "@growthbook/growthbook-react";
-
-//...
-
-<IfFeatureEnabled feature=${JSON.stringify(feature.id)}>
-  <p>Welcome to our site!</p>
-</IfFeatureEnabled>
-
-// or 
-const myFeature = useFeature(${JSON.stringify(feature.id)}).on;
-if (myFeature) { ...
-}
-`,
-      value: `
-console.log(growthbook.getFeatureValue(${JSON.stringify(
-        feature.id
-      )}), "fallback value");`,
-      docs: "https://docs.growthbook.io/lib/react",
-    },
-
-    {
-      id: "typescript",
-      display: "Typescript",
-      language: "tsx",
-      boolean: `if (growthbook.isOn(${JSON.stringify(feature.id)})) {
-  console.log("Feature is enabled!")
-} else {
-  console.log("fallback")
-}`,
-      value: `
-console.log(growthbook.getFeatureValue(${JSON.stringify(
-        feature.id
-      )}), "fallback value");`,
-      docs: "https://docs.growthbook.io/lib/js",
-    },
-
-    {
-      id: "javascript",
-      display: "Javascript",
-      language: "javascript",
-      boolean: `if (growthbook.isOn(${JSON.stringify(feature.id)})) {
-  console.log("Feature is enabled!")
-} else {
-  console.log("fallback")
-}`,
-      value: `
-console.log(growthbook.getFeatureValue(${JSON.stringify(
-        feature.id
-      )}), "fallback value");`,
-      docs: "https://docs.growthbook.io/lib/js",
-    },
-
-    {
-      id: "go",
-      display: "Go",
-      language: "go",
-      boolean: `if gb.Feature(${JSON.stringify(feature.id)}).On {
-  // serve the feature
-}`,
-      value: `value := gb.Feature(${JSON.stringify(
-        feature.id
-      )}).GetValueWithDefault("default value")
-fmt.Println(value)`,
-      docs: "https://docs.growthbook.io/lib/go",
-    },
-    {
-      id: "ruby",
-      display: "Ruby",
-      language: "ruby",
-      boolean: `if gb.on? ${rubySymbol(feature.id)}
-  # Do something
-end`,
-      value: `value = gb.feature_value(${rubySymbol(
-        feature.id
-      )}, 'default value')
-puts(value)`,
-      docs: "https://docs.growthbook.io/lib/ruby",
-    },
-    {
-      id: "kotlin",
-      display: "Kotlin (Android)",
-      language: "kotlin",
-      boolean: `if (gb.feature(${JSON.stringify(feature.id)}).on) {
-  // Feature is enabled!
-}`,
-      value: `val feature = gb.feature(${JSON.stringify(feature.id)})
-println(feature.value)
-`,
-      docs: "https://docs.growthbook.io/lib/kotlin",
-    },
-    {
-      id: "php",
-      display: "PHP",
-      language: "php",
-      boolean: `if ($growthbook->isOn(${JSON.stringify(feature.id)})) {
-  echo "It's on!";
-} else {
-  echo "It's off :(";
-}`,
-      value: `$value = $growthbook->getValue(${JSON.stringify(
-        feature.id
-      )}, "default value");
-
-echo $value;`,
-      docs: "https://docs.growthbook.io/lib/php",
-    },
-
-    {
-      id: "python",
-      display: "Python",
-      language: "python",
-      boolean: `if gb.isOn(${JSON.stringify(feature.id)}):
-  print("My feature is on!")`,
-      value: `color = gb.getFeatureValue(${JSON.stringify(
-        feature.id
-      )}, "blue")`,
-      docs: "https://docs.growthbook.io/lib/python",
-    },
-
-    // ruby: {
-    //   python: ``,
-    //   boolean: ``,
-    //   value: ``,
-    //   docs: "https://docs.growthbook.io/lib/ruby",
-    // },
-  ];
-
-  const codeType = feature.valueType === "boolean" ? "boolean" : "value";
+  const [languageFilter, setLanguageFilter] = useState<LanguageFilter>(
+    "popular"
+  );
+  const codeType = feature.valueType === "boolean" ? "boolean" : "multivariate";
 
   if (fullSnippet) {
-    return (
-      <CodeSnippetModal
-        close={close}
-        featureId={feature.id}
-        defaultLanguage={language}
-      />
-    );
+    return <InitialSDKConnectionForm close={close} feature={feature} />;
   }
+
+  const data = languageMapping[language];
 
   return (
     <Modal
+      trackingEventModalType=""
       open={true}
       close={close}
       size="lg"
       closeCta="Close"
-      header="Feature implementation"
+      header="Feature Implementation"
     >
-      <p>
-        {first && <>Congratulations on adding your first feature! </>}
-        Here is the example code on how to add it to your project
-      </p>
+      {first && <p>Congratulations on adding your first feature!</p>}
       <div>
-        <ControlledTabs
-          active={language}
-          setActive={(language) => setLanguage(language as Language)}
-        >
-          {codeSamples.map((o, i) => {
-            return (
-              <Tab key={i} display={o.display} id={o.id}>
-                <p>
-                  Read the{" "}
-                  <a href={o.docs} target="_blank" rel="noopener noreferrer">
-                    {o.display} SDK docs
-                  </a>{" "}
-                  or view the{" "}
-                  <a
-                    href="#"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setFullSnippet(true);
-                    }}
-                  >
-                    full implementation example
-                  </a>
-                  .
-                </p>
-                <Code language={o.language} code={o[codeType].trim()} />
-              </Tab>
-            );
-          })}
-        </ControlledTabs>
+        <SDKLanguageSelector
+          value={[language]}
+          setValue={([language]) => setLanguage(language)}
+          multiple={false}
+          includeOther={false}
+          languageFilter={languageFilter}
+          setLanguageFilter={setLanguageFilter}
+        />
+        <h3 className="mt-4">
+          {languageMapping[language]?.label} Usage Instructions
+        </h3>
+        <p>
+          Read the{" "}
+          <DocLink docSection={data.docs}>{data.label} SDK docs</DocLink> or
+          view a{" "}
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              setFullSnippet(true);
+            }}
+          >
+            complete implementation example
+          </a>
+          .
+        </p>
+
+        {codeType === "boolean" ? (
+          <BooleanFeatureCodeSnippet
+            language={language}
+            featureId={feature.id}
+          />
+        ) : (
+          <MultivariateFeatureCodeSnippet
+            language={language}
+            featureId={feature.id}
+            valueType={feature.valueType}
+          />
+        )}
       </div>
     </Modal>
   );

@@ -3,11 +3,14 @@ import {
   ExperimentInterfaceStringDates,
   ExperimentPhaseStringDates,
 } from "back-end/types/experiment";
-import { datetime } from "../../services/dates";
-import Modal from "../Modal";
-import { useDefinitions } from "../../services/DefinitionsContext";
 import { ExperimentSnapshotInterface } from "back-end/types/experiment-snapshot";
-import { getExposureQuery } from "../../services/datasources";
+import { FaQuestionCircle } from "react-icons/fa";
+import { datetime } from "shared/dates";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import { getExposureQuery } from "@/services/datasources";
+import Modal from "@/components/Modal";
+import Code from "@/components/SyntaxHighlighting/Code";
+import { AttributionModelTooltip } from "./AttributionModelTooltip";
 
 const FilterSummary: FC<{
   experiment: ExperimentInterfaceStringDates;
@@ -16,8 +19,14 @@ const FilterSummary: FC<{
 }> = ({ experiment, phase, snapshot }) => {
   const [showExpandedFilter, setShowExpandedFilter] = useState(false);
   const hasFilter =
-    snapshot.segment || snapshot.queryFilter || snapshot.activationMetric;
-  const { getSegmentById, getMetricById, getDatasourceById } = useDefinitions();
+    snapshot.settings.segment ||
+    snapshot.settings.queryFilter ||
+    snapshot.settings.activationMetric;
+  const {
+    getSegmentById,
+    getExperimentMetricById,
+    getDatasourceById,
+  } = useDefinitions();
   const datasource = getDatasourceById(experiment.datasource);
 
   return (
@@ -39,6 +48,7 @@ const FilterSummary: FC<{
         </a>
       </span>
       <Modal
+        trackingEventModalType=""
         header={"Experiment Details and Filters"}
         open={showExpandedFilter}
         closeCta="Close"
@@ -74,7 +84,7 @@ const FilterSummary: FC<{
                 <strong className="text-gray">Date range:</strong>
               </div>
               <div className="col">
-                <strong>{datetime(phase.dateStarted)}</strong> to
+                <strong>{datetime(phase.dateStarted ?? "")}</strong> to
                 <br />
                 <strong>
                   {datetime(phase.dateEnded || snapshot.dateCreated)}
@@ -92,8 +102,8 @@ const FilterSummary: FC<{
                 </small>
               </div>
               <div className="col">
-                {snapshot.segment ? (
-                  getSegmentById(snapshot.segment)?.name ?? "(unknown)"
+                {snapshot.settings.segment ? (
+                  getSegmentById(snapshot.settings.segment)?.name ?? "(unknown)"
                 ) : (
                   <>
                     <em>none</em> (all users included)
@@ -110,8 +120,9 @@ const FilterSummary: FC<{
               </small>
             </div>
             <div className="col">
-              {snapshot.activationMetric ? (
-                getMetricById(snapshot.activationMetric)?.name ?? "(unknown)"
+              {snapshot.settings.activationMetric ? (
+                getExperimentMetricById(snapshot.settings.activationMetric)
+                  ?.name ?? "(unknown)"
               ) : (
                 <em>none</em>
               )}
@@ -122,7 +133,7 @@ const FilterSummary: FC<{
               <strong className="text-gray">Metric Conversions:</strong>
             </div>
             <div className="col">
-              {snapshot.skipPartialData
+              {snapshot.settings.skipPartialData
                 ? "Excluding In-Progress Conversions"
                 : "Including In-Progress Conversions"}
             </div>
@@ -130,13 +141,15 @@ const FilterSummary: FC<{
           <div className="row mb-3">
             <div className="col-5">
               <strong className="text-gray">
-                Users in Multiple Variations:
+                <AttributionModelTooltip>
+                  Conversion Window Override <FaQuestionCircle />
+                </AttributionModelTooltip>
               </strong>
             </div>
             <div className="col">
-              {experiment.removeMultipleExposures
-                ? "Removed from analysis"
-                : "Included in analysis"}
+              {experiment.attributionModel === "experimentDuration"
+                ? "Ignore Conversion Windows"
+                : "Respect Conversion Windows"}
             </div>
           </div>
           {datasource?.properties?.queryLanguage === "sql" && (
@@ -145,8 +158,12 @@ const FilterSummary: FC<{
                 <strong className="text-gray">Custom SQL Filter:</strong>
               </div>
               <div className="col">
-                {snapshot.queryFilter ? (
-                  <code>{snapshot.queryFilter}</code>
+                {snapshot.settings.queryFilter ? (
+                  <Code
+                    language="sql"
+                    code={snapshot.settings.queryFilter}
+                    expandable={true}
+                  />
                 ) : (
                   <em>none</em>
                 )}

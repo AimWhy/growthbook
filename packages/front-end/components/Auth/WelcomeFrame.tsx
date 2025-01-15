@@ -1,21 +1,28 @@
-import { FC, ReactElement, useState } from "react";
-import LoadingOverlay from "../../components/LoadingOverlay";
+import { ReactNode, FC, ReactElement, useEffect } from "react";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import { trackPageView } from "@/services/track";
 
 type WelcomeFrameProps = {
   leftside: string | ReactElement | boolean;
   loading?: boolean;
+  children: ReactNode;
+  pathName: string;
 };
 const WelcomeFrame: FC<WelcomeFrameProps> = ({
   leftside,
   children,
   loading: loadingState,
+  pathName,
 }) => {
-  const [loading] = useState(loadingState);
+  // This page is pre-auth, so need to manually fire a page load event
+  useEffect(() => {
+    trackPageView(pathName);
+  }, [pathName]);
 
   return (
     <>
       <div className="welcome container-fluid">
-        {loading && <LoadingOverlay />}
+        {loadingState && <LoadingOverlay />}
         <div className="row full-height align-items-stretch d-flex flex-fill d-flex justify-content-start">
           <div className="col-sm-5 intro-side ">
             <div className="ghosted-logo"></div>

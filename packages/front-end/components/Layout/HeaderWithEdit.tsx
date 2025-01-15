@@ -1,37 +1,57 @@
 import clsx from "clsx";
 import { ReactElement } from "react";
-import { GBEdit } from "../Icons";
+import { GBEdit } from "@/components/Icons";
+import Tooltip from "@/components/Tooltip/Tooltip";
+import Link from "@/components/Radix/Link";
 
 export interface Props {
   className?: string;
+  containerClassName?: string;
   children: string | ReactElement;
   edit?: () => void;
   additionalActions?: ReactElement;
+  editClassName?: string;
+  stopPropagation?: boolean;
+  disabledMessage?: false | null | undefined | string | ReactElement;
 }
 
 export default function HeaderWithEdit({
   children,
   edit,
   additionalActions,
+  editClassName = "a",
   className = "h3",
+  containerClassName = "mb-2",
+  stopPropagation = false,
+  disabledMessage = null,
 }: Props) {
   return (
-    <div className="d-flex align-items-center mb-2">
-      <div className={clsx(className, "mb-0")}>{children}</div>
-      {edit && (
-        <div className="ml-1">
-          <a
-            href="#"
-            onClick={(e) => {
-              e.preventDefault();
-              edit();
-            }}
-          >
-            <GBEdit />
-          </a>
-        </div>
-      )}
-      {additionalActions && <div className="ml-1">{additionalActions}</div>}
+    <div className={containerClassName}>
+      <div className={clsx(className, "mb-0")}>
+        {children}{" "}
+        {edit ? (
+          <span className="ml-1">
+            <Link
+              className={editClassName}
+              role="button"
+              onClick={(e) => {
+                e.preventDefault();
+                if (stopPropagation) e.stopPropagation();
+                edit();
+              }}
+            >
+              <GBEdit />
+            </Link>
+          </span>
+        ) : disabledMessage ? (
+          <span className="ml-1 text-muted">
+            <Tooltip body={disabledMessage}>
+              <GBEdit />
+            </Tooltip>
+          </span>
+        ) : null}
+        {additionalActions && <div className="ml-1">{additionalActions}</div>}
+      </div>
     </div>
   );
 }

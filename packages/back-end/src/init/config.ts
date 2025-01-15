@@ -1,7 +1,7 @@
-import { env } from "string-env-interpolation";
-import yaml from "js-yaml";
 import { readFileSync, existsSync, statSync } from "fs";
 import path from "path";
+import { env } from "string-env-interpolation";
+import yaml from "js-yaml";
 import {
   EMAIL_ENABLED,
   ENVIRONMENT,
@@ -11,16 +11,22 @@ import {
   EMAIL_HOST_PASSWORD,
   EMAIL_HOST_USER,
   EMAIL_PORT,
-} from "../util/secrets";
+} from "back-end/src/util/secrets";
 import {
   DataSourceInterface,
   DataSourceInterfaceWithParams,
-} from "../../types/datasource";
-import { MetricInterface } from "../../types/metric";
-import { DimensionInterface } from "../../types/dimension";
-import { encryptParams } from "../services/datasource";
-import { OrganizationSettings } from "../../types/organization";
-import { upgradeMetricDoc, upgradeDatasourceObject } from "../util/migrations";
+} from "back-end/types/datasource";
+import { MetricInterface } from "back-end/types/metric";
+import { DimensionInterface } from "back-end/types/dimension";
+import { encryptParams } from "back-end/src/services/datasource";
+import { OrganizationSettings, ReqContext } from "back-end/types/organization";
+import {
+  upgradeMetricDoc,
+  upgradeDatasourceObject,
+} from "back-end/src/util/migrations";
+import { logger } from "back-end/src/util/logger";
+import { SegmentInterface } from "back-end/types/segment";
+import { ApiReqContext } from "back-end/types/api";
 
 export type ConfigFile = {
   organization?: {
@@ -47,6 +53,12 @@ export type ConfigFile = {
   dimensions?: {
     [key: string]: Omit<
       DimensionInterface,
+      "id" | "organization" | "dateCreated" | "dateUpdated"
+    >;
+  };
+  segments?: {
+    [key: string]: Omit<
+      SegmentInterface,
       "id" | "organization" | "dateCreated" | "dateUpdated"
     >;
   };
@@ -90,7 +102,7 @@ function loadConfig(initial = false) {
   } else if (ENVIRONMENT !== "production") {
     config = null;
     if (initial) {
-      console.log(
+      logger.info(
         "No config.yml file. Using MongoDB instead to store data sources, metrics, and dimensions."
       );
     }
@@ -98,23 +110,23 @@ function loadConfig(initial = false) {
 
   if (EMAIL_ENABLED) {
     if (!EMAIL_HOST)
-      console.error(
+      logger.error(
         "Email is enabled, but missing required EMAIL_HOST env variable"
       );
     if (!EMAIL_PORT)
-      console.error(
+      logger.error(
         "Email is enabled, but missing required EMAIL_PORT env variable"
       );
     if (!EMAIL_HOST_USER)
-      console.error(
+      logger.error(
         "Email is enabled, but missing required EMAIL_HOST_USER env variable"
       );
     if (!EMAIL_HOST_PASSWORD)
-      console.error(
+      logger.error(
         "Email is enabled, but missing required EMAIL_HOST_PASSWORD env variable"
       );
     if (!EMAIL_FROM)
-      console.error(
+      logger.error(
         "Email is enabled, but missing required EMAIL_FROM env variable"
       );
   }
@@ -147,6 +159,7 @@ export function getConfigDatasources(
     return upgradeDatasourceObject({
       id,
       name: d.name,
+      description: d.description,
       organization,
       params: encryptParams(d.params),
       settings: d.settings,
@@ -157,26 +170,31 @@ export function getConfigDatasources(
   });
 }
 
-export function getConfigMetrics(organization: string): MetricInterface[] {
+export function getConfigMetrics(
+  context: ReqContext | ApiReqContext
+): MetricInterface[] {
   reloadConfigIfNeeded();
   if (!config || !config.metrics) return [];
   const metrics = config.metrics;
 
-  return Object.keys(metrics).map((id) => {
-    const m = metrics[id];
+  return Object.keys(metrics)
+    .map((id) => {
+      const m = metrics[id];
 
-    return upgradeMetricDoc({
-      tags: [],
-      id,
-      ...m,
-      description: m?.description || "",
-      organization,
-      dateCreated: null,
-      dateUpdated: null,
-      queries: [],
-      runStarted: null,
-    });
-  });
+      return upgradeMetricDoc({
+        tags: [],
+        id,
+        ...m,
+        description: m?.description || "",
+        organization: context.org.id,
+        dateCreated: null,
+        dateUpdated: null,
+        queries: [],
+        runStarted: null,
+        managedBy: "config",
+      });
+    })
+    .filter((m) => context.permissions.canReadMultiProjectResource(m.projects));
 }
 
 export function getConfigDimensions(
@@ -202,4 +220,22 @@ export function getConfigDimensions(
 export function getConfigOrganizationSettings(): OrganizationSettings {
   reloadConfigIfNeeded();
   return config?.organization?.settings || {};
+}
+
+export function getConfigSegments(organization: string): SegmentInterface[] {
+  reloadConfigIfNeeded();
+  if (!config || !config.segments) return [];
+  const segments = config.segments;
+
+  return Object.keys(segments).map((id) => {
+    const d = segments[id];
+
+    return {
+      id,
+      ...d,
+      organization,
+      dateCreated: new Date(),
+      dateUpdated: new Date(),
+    };
+  });
 }

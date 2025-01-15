@@ -1,9 +1,9 @@
 import { FC } from "react";
 import { useForm } from "react-hook-form";
-import { useAuth } from "../../services/auth";
 import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
-import Modal from "../Modal";
-import Field from "../Forms/Field";
+import { useAuth } from "@/services/auth";
+import Modal from "@/components/Modal";
+import Field from "@/components/Forms/Field";
 
 const EditExperimentNameForm: FC<{
   experiment: ExperimentInterfaceStringDates;
@@ -19,6 +19,7 @@ const EditExperimentNameForm: FC<{
 
   return (
     <Modal
+      trackingEventModalType=""
       header={"Edit Name"}
       open={true}
       close={cancel}
@@ -32,7 +33,10 @@ const EditExperimentNameForm: FC<{
       })}
       cta="Save"
     >
-      <Field label="Name" {...form.register("name")} />
+      <Field
+        label="Name"
+        {...form.register("name", { setValueAs: (s) => s?.trim() })}
+      />
     </Modal>
   );
 };

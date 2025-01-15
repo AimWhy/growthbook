@@ -6,11 +6,12 @@ import React, {
 } from "react";
 import { useDropzone } from "react-dropzone";
 import { Screenshot } from "back-end/types/experiment";
-import { useAuth } from "../../services/auth";
-import styles from "./ScreenshotUpload.module.scss";
 import clsx from "clsx";
-import LoadingOverlay from "../LoadingOverlay";
-import { uploadFile } from "../../services/files";
+import { BiImageAdd } from "react-icons/bi";
+import { useAuth } from "@/services/auth";
+import { uploadFile } from "@/services/files";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import styles from "./ScreenshotUpload.module.scss";
 
 type props = {
   experiment: string;
@@ -26,10 +27,10 @@ const ScreenshotUpload = ({
   const { apiCall } = useAuth();
   const [loading, setLoading] = useState(0);
 
-  const onDrop = (files: File[]) => {
-    setLoading(loading + files.length);
+  const onDrop = async (files: File[]) => {
+    setLoading((previous) => previous + files.length);
 
-    files.forEach(async (file) => {
+    for (const file of files) {
       try {
         const { fileURL } = await uploadFile(apiCall, file);
 
@@ -45,7 +46,7 @@ const ScreenshotUpload = ({
           }
         );
 
-        setLoading(loading - 1);
+        setLoading((previous) => previous - 1);
 
         onSuccess(variation, {
           path: fileURL,
@@ -53,9 +54,9 @@ const ScreenshotUpload = ({
         });
       } catch (e) {
         alert(e.message);
-        setLoading(loading - 1);
+        setLoading((previous) => previous - 1);
       }
-    });
+    }
   };
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
 
@@ -70,14 +71,17 @@ const ScreenshotUpload = ({
     <>
       <div
         {...typedRootProps}
-        className={clsx(styles.droparea, { [styles.dragging]: isDragActive })}
+        className={clsx(styles.droparea, "my-1", {
+          [styles.dragging]: isDragActive,
+        })}
       >
         {loading > 0 ? <LoadingOverlay /> : ""}
         <input {...getInputProps()} />
         <div className={styles.message}>Drop Image Here...</div>
-        <button className="btn btn-outline-primary btn-sm">
-          Upload Screenshot
-        </button>
+        <span className={styles.textlink}>
+          <BiImageAdd className="mr-1" style={{ fontSize: 20 }} />
+          Add Screenshot
+        </span>
       </div>
     </>
   );

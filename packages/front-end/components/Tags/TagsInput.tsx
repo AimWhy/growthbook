@@ -1,9 +1,11 @@
 import { FC } from "react";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import MultiSelectField from "../Forms/MultiSelectField";
 import { StylesConfig } from "react-select";
-import { isLight } from "./Tag";
 import { TagInterface } from "back-end/types/tag";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import MultiSelectField from "@/components/Forms/MultiSelectField";
+import usePermissionsUtil from "@/hooks/usePermissionsUtils";
+import { TAG_COLORS_MAP } from "@/services/tags";
+import { isLight } from "./Tag";
 
 export interface ColorOption {
   readonly value: string;
@@ -13,6 +15,8 @@ export interface ColorOption {
   readonly isFixed?: boolean;
   readonly isDisabled?: boolean;
 }
+
+const DEFAULT_TAG_COLOR = TAG_COLORS_MAP["blue"];
 
 const TagsInput: FC<{
   onChange: (tags: string[]) => void;
@@ -32,13 +36,18 @@ const TagsInput: FC<{
   creatable = true,
 }) => {
   const { tags, getTagById } = useDefinitions();
+  const permissionsUtil = usePermissionsUtil();
   if (!tagOptions) tagOptions = tags;
+
+  if (!permissionsUtil.canCreateAndUpdateTag()) {
+    creatable = false;
+  }
 
   const tagSet = new Set(tagOptions.map((t) => t.id));
   tagOptions = [...tagOptions];
   value.forEach((value) => {
     if (!tagSet.has(value)) {
-      tagOptions.push({
+      tagOptions?.push({
         id: value,
         description: "",
         color: getTagById(value)?.color || "#029dd1",
@@ -78,6 +87,14 @@ const TagsInput: FC<{
         },
       };
     },
+    control: (styles, { isFocused }) => {
+      return {
+        ...styles,
+        boxShadow: `0px 0px 0px 1px ${
+          isFocused ? "var(--violet-8)" : undefined
+        }`,
+      };
+    },
     multiValue: (styles, { data }) => {
       return {
         ...styles,
@@ -103,10 +120,12 @@ const TagsInput: FC<{
     <MultiSelectField
       options={
         tagOptions.map((t) => {
+          // Converts Radix color to hex color to make it compatible with MultiSelectField
+          const hexColor = TAG_COLORS_MAP[t.color] ?? DEFAULT_TAG_COLOR;
           return {
             value: t.id,
             label: t.id,
-            color: t.color,
+            color: hexColor || "var(--form-multivalue-text-color)",
             tooltip: t.description,
           };
         }) ?? []
@@ -117,6 +136,7 @@ const TagsInput: FC<{
       }}
       closeMenuOnSelect={closeMenuOnSelect}
       autoFocus={autoFocus}
+      // @ts-expect-error TS(2322) If you come across this, please fix it!: Type 'StylesConfig<ColorOption, true, GroupBase<Co... Remove this comment to see the full error message
       customStyles={tagStyles}
       placeholder={prompt}
       creatable={creatable}

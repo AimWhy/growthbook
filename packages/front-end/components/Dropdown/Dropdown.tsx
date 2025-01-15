@@ -6,8 +6,10 @@ import {
   Children,
   isValidElement,
   cloneElement,
+  ReactNode,
+  CSSProperties,
 } from "react";
-import useGlobalMenu from "../../services/useGlobalMenu";
+import useGlobalMenu from "@/services/useGlobalMenu";
 import DropdownLink from "./DropdownLink";
 import styles from "./Dropdown.module.scss";
 
@@ -19,8 +21,14 @@ const Dropdown: FC<{
   right?: boolean;
   width?: number | string;
   className?: string;
+  toggleClassName?: string;
+  toggleClosedClassName?: string;
+  toggleOpenClassName?: string;
+  toggleStyle?: CSSProperties;
   open?: boolean;
   setOpen?: (open: boolean) => void;
+  enabled?: boolean;
+  children: ReactNode;
 }> = ({
   uuid,
   toggle,
@@ -30,8 +38,13 @@ const Dropdown: FC<{
   right = true,
   width = "auto",
   className = "",
+  toggleClassName = "",
+  toggleClosedClassName = "",
+  toggleOpenClassName = "",
+  toggleStyle,
   open,
   setOpen,
+  enabled = true,
 }) => {
   // If uncontrolled, use local state
   const [_open, _setOpen] = useState(false);
@@ -40,16 +53,16 @@ const Dropdown: FC<{
     setOpen = _setOpen;
   }
 
-  useGlobalMenu(`.${uuid}`, () => setOpen(false));
+  useGlobalMenu(`.${uuid}`, () => setOpen?.(false));
 
   const content = Children.map(children, (child) => {
     if (!isValidElement(child)) return null;
 
     if (child.type === DropdownLink && child.props.closeOnClick !== false) {
-      return cloneElement(child, {
+      return cloneElement(child as ReactElement, {
         onClick: () => {
           child.props.onClick();
-          setOpen(false);
+          setOpen?.(false);
         },
       });
     }
@@ -59,30 +72,41 @@ const Dropdown: FC<{
 
   return (
     <div
-      className={clsx("dropdown", uuid, styles.dropdownwrap, {
-        [styles.open]: open,
+      className={clsx("dropdown", uuid, styles.dropdownwrap, toggleClassName, {
+        [styles.open]: !toggleOpenClassName && open,
       })}
+      style={toggleStyle}
     >
       <div
-        className={clsx({ "dropdown-toggle": caret })}
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(!open);
-        }}
-        style={{ cursor: "pointer" }}
+        className={clsx({
+          "dropdown-toggle": caret,
+          [toggleOpenClassName]: open,
+          [toggleClosedClassName]: !open,
+        })}
+        onClick={
+          enabled
+            ? (e) => {
+                e.preventDefault();
+                setOpen?.(!open);
+              }
+            : undefined
+        }
+        style={enabled ? { cursor: "pointer" } : {}}
       >
         {toggle}
       </div>
-      <div
-        className={clsx("dropdown-menu", styles.dropdownmenu, className, {
-          "dropdown-menu-right": right,
-          show: open,
-        })}
-        style={{ width }}
-      >
-        {header && <div className="dropdown-header">{header}</div>}
-        {content}
-      </div>
+      {enabled && (
+        <div
+          className={clsx("dropdown-menu", styles.dropdownmenu, className, {
+            "dropdown-menu-right": right,
+            show: open,
+          })}
+          style={{ width }}
+        >
+          {header && <div className="dropdown-header">{header}</div>}
+          {content}
+        </div>
+      )}
     </div>
   );
 };

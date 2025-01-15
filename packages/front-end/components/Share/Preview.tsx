@@ -1,13 +1,14 @@
 import React, { FC } from "react";
 import dynamic from "next/dynamic";
-import useApi from "../../hooks/useApi";
-import LoadingOverlay from "../../components/LoadingOverlay";
 import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
 import { PresentationInterface } from "back-end/types/presentation";
-import useSwitchOrg from "../../services/useSwitchOrg";
 import { ExperimentSnapshotInterface } from "back-end/types/experiment-snapshot";
-const DynamicPresentation = dynamic(
-  () => import("../../components/Share/Presentation"),
+import useApi from "@/hooks/useApi";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import useSwitchOrg from "@/services/useSwitchOrg";
+import { Props as PresentationProps } from "./Presentation";
+const DynamicPresentation = dynamic<PresentationProps>(
+  () => import("@/components/Share/Presentation"),
   {
     ssr: false,
     //loading: () => (<p>Loading...</p>) // this causes a lint error
@@ -42,7 +43,7 @@ const Preview: FC<{
     }[];
   }>(`/presentation/preview/?expIds=${expIds}`);
 
-  useSwitchOrg(pdata?.presentation?.organization);
+  useSwitchOrg(pdata?.presentation?.organization || null);
 
   if (error) {
     return (

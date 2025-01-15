@@ -3,16 +3,22 @@ import {
   ExperimentInterfaceStringDates,
   ExperimentPhaseStringDates,
 } from "back-end/types/experiment";
-import Field from "../Forms/Field";
-import Modal from "../Modal";
-import { useAuth } from "../../services/auth";
-import VariationsInput from "../Features/VariationsInput";
+import { useState } from "react";
+import { PiCaretDown, PiCaretUp } from "react-icons/pi";
+import { datetime } from "shared/dates";
+import { useAuth } from "@/services/auth";
+import Field from "@/components/Forms/Field";
+import Modal from "@/components/Modal";
+import { validateSavedGroupTargeting } from "@/components/Features/SavedGroupTargetingField";
+import DatePicker from "@/components/DatePicker";
 
 export interface Props {
   close: () => void;
   i: number;
   experiment: ExperimentInterfaceStringDates;
   mutate: () => void;
+  editTargeting: (() => void) | null;
+  source?: string;
 }
 
 export default function EditPhaseModal({
@@ -20,24 +26,36 @@ export default function EditPhaseModal({
   i,
   experiment,
   mutate,
+  editTargeting,
+  source,
 }: Props) {
   const form = useForm<ExperimentPhaseStringDates>({
     defaultValues: {
       ...experiment.phases[i],
-      dateStarted: experiment.phases[i].dateStarted.substr(0, 16),
+      seed: experiment.phases[i].seed ?? experiment.trackingKey,
+      dateStarted: (experiment.phases[i].dateStarted ?? "").substr(0, 16),
       dateEnded: experiment.phases[i].dateEnded
-        ? experiment.phases[i].dateEnded.substr(0, 16)
+        ? (experiment.phases[i].dateEnded ?? "").substr(0, 16)
         : "",
     },
   });
+  const [advancedOptionsOpen, setAdvancedOptionsOpen] = useState(false);
+
   const { apiCall } = useAuth();
+
+  const isDraft = experiment.status === "draft";
+  const isMultiPhase = experiment.phases.length > 1;
 
   return (
     <Modal
+      trackingEventModalType="edit-phase-modal"
+      trackingEventModalSource={source}
       open={true}
       close={close}
       header={`Edit Analysis Phase #${i + 1}`}
       submit={form.handleSubmit(async (value) => {
+        validateSavedGroupTargeting(value.savedGroups);
+
         await apiCall(`/experiment/${experiment.id}/phase/${i}`, {
           method: "PUT",
           body: JSON.stringify(value),
@@ -45,30 +63,35 @@ export default function EditPhaseModal({
         mutate();
       })}
       size="lg"
+      bodyClassName="px-4 pt-4"
     >
-      <Field
-        label="Type of Phase"
-        {...form.register("phase")}
-        options={[
-          "ramp",
-          { value: "main", display: "main (default)" },
-          "holdout",
-        ]}
-      />
-      <Field
+      <Field label="Phase Name" {...form.register("name")} required />
+      <DatePicker
         label="Start Time (UTC)"
-        type="datetime-local"
-        {...form.register("dateStarted")}
+        date={form.watch("dateStarted")}
+        setDate={(v) => {
+          form.setValue("dateStarted", v ? datetime(v) : "");
+        }}
+        scheduleEndDate={form.watch("dateEnded")}
+        disableAfter={form.watch("dateEnded") || undefined}
       />
-      <Field
-        label="End Time (UTC)"
-        type="datetime-local"
-        {...form.register("dateEnded")}
-        helpText={
-          <>
+      {!(isDraft && !isMultiPhase) ? (
+        <>
+          <DatePicker
+            label="End Time (UTC)"
+            date={form.watch("dateEnded")}
+            setDate={(v) => {
+              form.setValue("dateEnded", v ? datetime(v) : "");
+            }}
+            scheduleStartDate={form.watch("dateStarted")}
+            disableBefore={form.watch("dateStarted") || undefined}
+            containerClassName=""
+          />
+          <div className="mb-3 mt-1 small">
             Leave blank if still running.{" "}
             <a
-              href="#"
+              role="button"
+              className="a"
               onClick={(e) => {
                 e.preventDefault();
                 form.setValue("dateEnded", "");
@@ -76,38 +99,60 @@ export default function EditPhaseModal({
             >
               Clear Input
             </a>
-          </>
-        }
-      />
-      {form.watch("dateEnded") && (
-        <Field
-          label="Reason for Stopping"
-          textarea
-          {...form.register("reason")}
-          placeholder="(optional)"
-        />
+          </div>
+          {form.watch("dateEnded") && (
+            <Field
+              label="Reason for Stopping"
+              textarea
+              {...form.register("reason")}
+              placeholder="(optional)"
+            />
+          )}
+        </>
+      ) : null}
+
+      {!isDraft && (
+        <div className="alert alert-info mt-4">
+          Trying to change targeting rules, traffic allocation, or start a new
+          phase? Use the{" "}
+          <a
+            role="button"
+            className="a"
+            onClick={() => {
+              editTargeting?.();
+              close();
+            }}
+          >
+            Make Changes
+          </a>{" "}
+          button instead.
+        </div>
       )}
 
-      <VariationsInput
-        valueType={"string"}
-        coverage={form.watch("coverage")}
-        setCoverage={(coverage) => form.setValue("coverage", coverage)}
-        setWeight={(i, weight) =>
-          form.setValue(`variationWeights.${i}`, weight)
-        }
-        valueAsId={true}
-        variations={
-          experiment.variations.map((v, i) => {
-            return {
-              value: v.key || i + "",
-              name: v.name,
-              weight: form.watch(`variationWeights.${i}`),
-            };
-          }) || []
-        }
-        coverageTooltip="This is just for documentation purposes and has no effect on the analysis."
-        showPreview={false}
-      />
+      {advancedOptionsOpen && (
+        //edit seed
+        <Field
+          label="Seed"
+          type="input"
+          {...form.register("seed")}
+          helpText={
+            <>
+              <strong className="text-danger">Warning:</strong> Changing this
+              will re-randomize experiment traffic.
+            </>
+          }
+        />
+      )}
+      <span
+        className="ml-auto link-purple cursor-pointer"
+        onClick={(e) => {
+          e.preventDefault();
+          setAdvancedOptionsOpen(!advancedOptionsOpen);
+        }}
+      >
+        Advanced Options{" "}
+        {!advancedOptionsOpen ? <PiCaretDown /> : <PiCaretUp />}
+      </span>
     </Modal>
   );
 }

@@ -1,32 +1,30 @@
 import { Response } from "express";
-import { AuthRequest } from "../types/AuthRequest";
+import { FilterQuery } from "mongoose";
+import { AuthRequest } from "back-end/src/types/AuthRequest";
 import {
   getIdeasByOrganization,
   createIdea,
   getIdeaById,
   deleteIdeaById,
   getIdeasByQuery,
-} from "../services/ideas";
-import { IdeaInterface } from "../../types/idea";
-import { addTagsDiff } from "../models/TagModel";
-import { Vote } from "../../types/vote";
-import { getOrgFromReq, userHasAccess } from "../services/organizations";
+} from "back-end/src/services/ideas";
+import { IdeaInterface } from "back-end/types/idea";
+import { addTagsDiff } from "back-end/src/models/TagModel";
+import { Vote } from "back-end/types/vote";
+import { getContextFromReq } from "back-end/src/services/organizations";
 import {
   getImpactEstimate,
   ImpactEstimateModel,
-  createImpactEstimate,
-} from "../models/ImpactEstimateModel";
-import { ImpactEstimateInterface } from "../../types/impact-estimate";
-import { ExperimentModel } from "../models/ExperimentModel";
-import { FilterQuery } from "mongoose";
-import { IdeaDocument } from "../models/IdeasModel";
+} from "back-end/src/models/ImpactEstimateModel";
+import { IdeaDocument } from "back-end/src/models/IdeasModel";
+import { getExperimentByIdea } from "back-end/src/models/ExperimentModel";
 
 export async function getIdeas(
   // eslint-disable-next-line
   req: AuthRequest<any, any, { project?: string }>,
   res: Response
 ) {
-  const { org } = getOrgFromReq(req);
+  const { org } = getContextFromReq(req);
   let project = "";
   if (typeof req.query.project === "string") {
     project = req.query.project;
@@ -44,42 +42,15 @@ export async function getEstimatedImpact(
   req: AuthRequest<{ metric: string; segment?: string }>,
   res: Response
 ) {
-  req.checkPermissions("createIdeas", "runQueries");
-
   const { metric, segment } = req.body;
 
-  const { org } = getOrgFromReq(req);
+  const context = getContextFromReq(req);
   const estimate = await getImpactEstimate(
-    org.id,
+    context,
     metric,
-    org.settings?.metricAnalysisDays || 30,
+    context.org.settings?.metricAnalysisDays || 30,
     segment
   );
-
-  res.status(200).json({
-    status: 200,
-    estimate,
-  });
-}
-
-export async function postEstimatedImpactManual(
-  req: AuthRequest<ImpactEstimateInterface>,
-  res: Response
-) {
-  req.checkPermissions("createIdeas", "runQueries");
-
-  const { org } = getOrgFromReq(req);
-  const { conversionsPerDay, metric } = req.body;
-
-  if (!metric) {
-    throw new Error("Missing required metric.");
-  }
-
-  const estimate = await createImpactEstimate({
-    organization: org.id,
-    metric,
-    conversionsPerDay,
-  });
 
   res.status(200).json({
     status: 200,
@@ -96,10 +67,13 @@ export async function postIdeas(
   req: AuthRequest<Partial<IdeaInterface>>,
   res: Response
 ) {
-  req.checkPermissions("createIdeas");
-
-  const { org, userId } = getOrgFromReq(req);
+  const context = getContextFromReq(req);
+  const { org, userId } = context;
   const data = req.body;
+
+  if (!context.permissions.canCreateIdea(data)) {
+    context.permissions.throwPermissionError();
+  }
   data.organization = org.id;
   data.source = "web";
   data.userId = userId;
@@ -112,26 +86,18 @@ export async function postIdeas(
 }
 
 export async function getIdea(
-  req: AuthRequest<Partial<IdeaInterface>>,
+  req: AuthRequest<Partial<IdeaInterface>, { id: string }>,
   res: Response
 ) {
-  const { id }: { id: string } = req.params;
-  //const data = req.body;
+  const { id } = req.params;
+  const context = getContextFromReq(req);
 
   const idea = await getIdeaById(id);
 
-  if (!idea) {
-    res.status(403).json({
+  if (!idea || idea.organization !== context.org.id) {
+    res.status(404).json({
       status: 404,
       message: "Idea not found",
-    });
-    return;
-  }
-
-  if (!(await userHasAccess(req, idea.organization))) {
-    res.status(403).json({
-      status: 403,
-      message: "You do not have access to this idea",
     });
     return;
   }
@@ -142,20 +108,19 @@ export async function getIdea(
       id: idea.estimateParams.estimate,
     });
     if (estimate && estimate.organization !== idea.organization) {
-      console.error(
-        "Estimate org does not match idea org",
-        estimate.id,
-        estimate.organization,
-        idea.organization
+      req.log.error(
+        {
+          estimateId: estimate.id,
+          estimateOrg: estimate.organization,
+          ideaOrg: idea.organization,
+        },
+        "Estimate org does not match idea org"
       );
       estimate = null;
     }
   }
 
-  const experiment = await ExperimentModel.findOne({
-    organization: idea.organization,
-    ideaSource: idea.id,
-  });
+  const experiment = await getExperimentByIdea(context, idea);
 
   res.status(200).json({
     status: 200,
@@ -181,12 +146,11 @@ export async function postIdea(
   req: AuthRequest<IdeaInterface, { id: string }>,
   res: Response
 ) {
-  req.checkPermissions("createIdeas");
-
   const { id } = req.params;
   const idea = await getIdeaById(id);
   const data = req.body;
-  const { org } = getOrgFromReq(req);
+  const context = getContextFromReq(req);
+  const { org } = context;
 
   if (!idea) {
     res.status(403).json({
@@ -204,6 +168,9 @@ export async function postIdea(
     return;
   }
 
+  if (!context.permissions.canUpdateIdea(idea, data)) {
+    context.permissions.throwPermissionError();
+  }
   const existing = idea.toJSON();
 
   data.text && idea.set("text", data.text);
@@ -232,11 +199,10 @@ export async function deleteIdea(
   req: AuthRequest<IdeaInterface, { id: string }>,
   res: Response
 ) {
-  req.checkPermissions("createIdeas");
-
   const { id } = req.params;
   const idea = await getIdeaById(id);
-  const { org } = getOrgFromReq(req);
+  const context = getContextFromReq(req);
+  const { org } = context;
 
   if (!idea) {
     res.status(403).json({
@@ -252,6 +218,10 @@ export async function deleteIdea(
       message: "You do not have access to this idea",
     });
     return;
+  }
+
+  if (!context.permissions.canDeleteIdea(idea)) {
+    context.permissions.throwPermissionError();
   }
 
   // note: we might want to change this to change the status to
@@ -272,7 +242,7 @@ export async function postVote(
   const data = req.body;
   const idea = await getIdeaById(id);
 
-  const { org, userId } = getOrgFromReq(req);
+  const { org, userId } = getContextFromReq(req);
 
   if (!idea) {
     res.status(403).json({
@@ -323,19 +293,19 @@ export async function postVote(
       idea: idea,
     });
   } catch (e) {
+    req.log.error(e, "Failed to vote");
     res.status(400).json({
       status: 400,
       message: e.message,
     });
-    console.error(e);
   }
 }
 
 export async function getRecentIdeas(
-  req: AuthRequest<null, { num: string }>,
+  req: AuthRequest<unknown, { num: string }, { project?: string }>,
   res: Response
 ) {
-  const { org } = getOrgFromReq(req);
+  const { org } = getContextFromReq(req);
   const { num } = req.params;
   let intNum = parseInt(num);
   if (intNum > 100) intNum = 100;

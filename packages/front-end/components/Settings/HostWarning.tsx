@@ -1,14 +1,17 @@
-import { isCloud } from "../../services/env";
+import { isCloud } from "@/services/env";
 
 export default function HostWarning({
   host,
   setHost,
 }: {
-  host: string;
+  host?: string;
   setHost: (host: string) => void;
 }) {
   // Trying to connect to localhost
-  if (host.match(/^([a-z0-9+-_]+:\/\/)?(localhost|127.0.0.1)($|[/?:])/)) {
+  if (
+    host &&
+    host.match(/^([a-z0-9+-_]+:\/\/)?(localhost|127.0.0.1)($|[/?:])/)
+  ) {
     if (isCloud()) {
       return (
         <div className="alert alert-danger">

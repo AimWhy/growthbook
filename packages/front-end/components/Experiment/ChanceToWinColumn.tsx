@@ -1,110 +1,88 @@
 import clsx from "clsx";
 import { SnapshotMetric } from "back-end/types/experiment-snapshot";
-import { MetricInterface } from "back-end/types/metric";
-import useConfidenceLevels from "../../hooks/useConfidenceLevels";
-import {
-  hasEnoughData,
-  isBelowMinChange,
-  isSuspiciousUplift,
-} from "../../services/experiments";
-import { defaultMinSampleSize } from "../../services/metrics";
-import NotEnoughData from "./NotEnoughData";
-import { ExperimentStatus } from "back-end/types/experiment";
-import Tooltip from "../Tooltip";
+import { HiOutlineExclamationCircle } from "react-icons/hi";
+import { DetailedHTMLProps, TdHTMLAttributes } from "react";
+import { RowResults } from "@/services/experiments";
+import NotEnoughData from "@/components/Experiment/NotEnoughData";
+import { GBSuspicious } from "@/components/Icons";
+import NoScaledImpact from "@/components/Experiment/NoScaledImpact";
 
 const percentFormatter = new Intl.NumberFormat(undefined, {
   style: "percent",
-  maximumFractionDigits: 2,
+  maximumFractionDigits: 1,
 });
 
-export default function ChanceToWinColumn({
-  metric,
-  status,
-  isLatestPhase,
-  startDate,
-  snapshotDate,
-  baseline,
-  stats,
-}: {
-  metric: MetricInterface;
-  status: ExperimentStatus;
-  isLatestPhase: boolean;
-  startDate: string;
-  snapshotDate: Date;
-  baseline: SnapshotMetric;
+interface Props
+  extends DetailedHTMLProps<
+    TdHTMLAttributes<HTMLTableCellElement>,
+    HTMLTableCellElement
+  > {
   stats: SnapshotMetric;
-}) {
-  const minSampleSize = metric?.minSampleSize || defaultMinSampleSize;
-  const enoughData = hasEnoughData(baseline, stats, metric);
-  const suspiciousChange = isSuspiciousUplift(baseline, stats, metric);
-  const belowMinChange = isBelowMinChange(baseline, stats, metric);
-  const { ciUpper, ciLower } = useConfidenceLevels();
-
-  const shouldHighlight =
-    metric &&
-    baseline?.value &&
-    stats?.value &&
-    enoughData &&
-    !suspiciousChange &&
-    !belowMinChange;
-
-  const chanceToWin = stats?.chanceToWin ?? 0;
-
-  let sigText = "";
-  let className = "";
-  if (shouldHighlight && chanceToWin > ciUpper) {
-    sigText = `Significant win as the chance to win is above the ${percentFormatter.format(
-      ciUpper
-    )} threshold`;
-    className = "won";
-  } else if (shouldHighlight && chanceToWin < ciLower) {
-    sigText = `Significant loss as the chance to win is below the ${percentFormatter.format(
-      ciLower
-    )} threshold`;
-    className = "lost";
-  }
-  if (belowMinChange && (chanceToWin > ciUpper || chanceToWin < ciLower)) {
-    sigText =
-      "The change is significant, but too small to matter (below the min detectable change threshold). Consider this a draw.";
-    className += " draw";
-  }
-
+  baseline: SnapshotMetric;
+  rowResults: RowResults;
+  showRisk?: boolean;
+  showSuspicious?: boolean;
+  showPercentComplete?: boolean;
+  showTimeRemaining?: boolean;
+  showGuardrailWarning?: boolean;
+  className?: string;
+  hideScaledImpact?: boolean;
+}
+export default function ChanceToWinColumn({
+  stats,
+  baseline,
+  rowResults,
+  showRisk = true,
+  showSuspicious = true,
+  showPercentComplete = false,
+  showTimeRemaining = true,
+  showGuardrailWarning = false,
+  className,
+  hideScaledImpact = false,
+  ...otherProps
+}: Props) {
+  const shouldRenderRisk =
+    showRisk &&
+    rowResults.riskMeta.showRisk &&
+    ["warning", "danger"].includes(rowResults.riskMeta.riskStatus) &&
+    rowResults.resultsStatus !== "lost";
   return (
-    <td
-      className={clsx(
-        "variation chance result-number align-middle tiptrigger d-table-cell",
-        className
-      )}
-    >
+    <td className={clsx("chance align-middle", className)} {...otherProps}>
       {!baseline?.value || !stats?.value ? (
-        <em>no data</em>
-      ) : !enoughData ? (
+        <em className="text-muted font-weight-normal">no data</em>
+      ) : hideScaledImpact ? (
+        <NoScaledImpact />
+      ) : !rowResults.enoughData ? (
         <NotEnoughData
-          experimentStatus={status}
-          isLatestPhase={isLatestPhase}
-          baselineValue={baseline?.value}
-          variationValue={stats?.value}
-          minSampleSize={minSampleSize}
-          snapshotCreated={snapshotDate}
-          phaseStart={startDate}
+          rowResults={rowResults}
+          showTimeRemaining={showTimeRemaining}
+          showPercentComplete={showPercentComplete}
         />
-      ) : suspiciousChange ? (
-        <div>
-          <div className="mb-1">
-            <span className="badge badge-pill badge-warning">
-              suspicious result
-            </span>
-          </div>
-          <small className="text-muted">value changed too much</small>
-        </div>
       ) : (
         <>
-          {percentFormatter.format(chanceToWin)}
-          {sigText !== "" && (
-            <Tooltip text={sigText} className="d-block" tipPosition={"top"}>
-              {" "}
-            </Tooltip>
-          )}
+          <div className="result-number d-inline-block">
+            {percentFormatter.format(stats.chanceToWin ?? 0)}
+          </div>
+          {shouldRenderRisk ? (
+            <span
+              className={rowResults.riskMeta.riskStatus}
+              style={{ marginLeft: 1, marginBottom: 4 }}
+            >
+              <HiOutlineExclamationCircle />
+            </span>
+          ) : null}
+          {showGuardrailWarning &&
+          rowResults.guardrailWarning &&
+          !shouldRenderRisk ? (
+            <span className="warning" style={{ marginLeft: 1 }}>
+              <HiOutlineExclamationCircle />
+            </span>
+          ) : null}
+          {showSuspicious && rowResults.suspiciousChange ? (
+            <span className="suspicious" style={{ marginLeft: 1 }}>
+              <GBSuspicious />
+            </span>
+          ) : null}
         </>
       )}
     </td>

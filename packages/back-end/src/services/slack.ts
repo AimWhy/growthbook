@@ -1,10 +1,9 @@
-import { ServerResponse } from "http";
-import { IncomingMessage } from "http";
+import { ServerResponse, IncomingMessage } from "http";
 import crypto from "crypto";
-import { SLACK_SIGNING_SECRET } from "../util/secrets";
 import { WebClient } from "@slack/web-api";
-import { UserModel } from "../models/UserModel";
-import { OrganizationInterface } from "../../types/organization";
+import { SLACK_SIGNING_SECRET } from "back-end/src/util/secrets";
+import { getUserByEmail } from "back-end/src/models/UserModel";
+import { OrganizationInterface } from "back-end/types/organization";
 
 // Initialize a single instance for the whole app
 const web = new WebClient();
@@ -14,7 +13,6 @@ export function verifySlackRequestSignature(
   res: ServerResponse,
   buf: Buffer
 ) {
-  console.log(req.headers);
   const rawTimestamp = req.headers["x-slack-request-timestamp"];
   if (!rawTimestamp || typeof rawTimestamp !== "string") {
     throw new Error("Missing or Invalid timestamp");
@@ -55,7 +53,7 @@ export async function getUserInfoBySlackId(
 
     let id: string | null = null;
     if (email) {
-      const user = await UserModel.findOne({ email });
+      const user = await getUserByEmail(email);
       if (user) {
         // Make sure user is part of the organization
         if (organization.members.map((m) => m.id).includes(user.id)) {

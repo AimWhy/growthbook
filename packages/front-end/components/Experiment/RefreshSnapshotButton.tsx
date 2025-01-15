@@ -1,21 +1,40 @@
 import { FC, useState } from "react";
-import { useAuth } from "../../services/auth";
 import { BsArrowRepeat } from "react-icons/bs";
-import Button from "../Button";
 import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
+import {
+  ExperimentSnapshotInterface,
+  ExperimentSnapshotAnalysis,
+  ExperimentSnapshotAnalysisSettings,
+} from "back-end/types/experiment-snapshot";
+import { useAuth } from "@/services/auth";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import { trackSnapshot } from "@/services/track";
+import Button from "@/components/Button";
 import ManualSnapshotForm from "./ManualSnapshotForm";
-import { ExperimentSnapshotInterface } from "back-end/types/experiment-snapshot";
 
 const RefreshSnapshotButton: FC<{
   mutate: () => void;
   experiment: ExperimentInterfaceStringDates;
-  lastSnapshot?: ExperimentSnapshotInterface;
+  lastAnalysis?: ExperimentSnapshotAnalysis;
   phase: number;
   dimension?: string;
-}> = ({ mutate, experiment, lastSnapshot, phase, dimension }) => {
+  setAnalysisSettings: (
+    settings: ExperimentSnapshotAnalysisSettings | null
+  ) => void;
+  resetFilters?: () => void;
+}> = ({
+  mutate,
+  experiment,
+  lastAnalysis,
+  phase,
+  dimension,
+  setAnalysisSettings,
+  resetFilters,
+}) => {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [longResult, setLongResult] = useState(false);
+  const { getDatasourceById } = useDefinitions();
 
   const { apiCall } = useAuth();
   const manual = !experiment.datasource;
@@ -27,17 +46,24 @@ const RefreshSnapshotButton: FC<{
       return;
     }
 
-    await apiCall<{ status: number; message: string }>(
-      `/experiment/${experiment.id}/snapshot`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          phase,
-          dimension,
-        }),
-      }
+    const res = await apiCall<{
+      status: number;
+      message: string;
+      snapshot: ExperimentSnapshotInterface;
+    }>(`/experiment/${experiment.id}/snapshot`, {
+      method: "POST",
+      body: JSON.stringify({
+        phase,
+        dimension,
+      }),
+    });
+    setAnalysisSettings(null);
+    trackSnapshot(
+      "create",
+      "RefreshSnapshotButton",
+      getDatasourceById(experiment.datasource)?.type || null,
+      res.snapshot
     );
-
     mutate();
   };
 
@@ -49,7 +75,7 @@ const RefreshSnapshotButton: FC<{
           close={() => setOpen(false)}
           experiment={experiment}
           success={mutate}
-          lastSnapshot={lastSnapshot}
+          lastAnalysis={lastAnalysis}
         />
       )}
       {loading && longResult && (
@@ -58,6 +84,7 @@ const RefreshSnapshotButton: FC<{
       <Button
         color="outline-primary"
         onClick={async () => {
+          resetFilters?.();
           setLoading(true);
           setLongResult(false);
 
@@ -76,7 +103,7 @@ const RefreshSnapshotButton: FC<{
           }
         }}
       >
-        <BsArrowRepeat /> Update Data
+        <BsArrowRepeat /> Update
       </Button>
     </>
   );

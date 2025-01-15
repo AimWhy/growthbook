@@ -1,22 +1,23 @@
-import { useDefinitions } from "../../services/DefinitionsContext";
 import { dump } from "js-yaml";
 import { useMemo } from "react";
 import { OrganizationSettings } from "back-end/types/organization";
 import { FaDownload } from "react-icons/fa";
-import { useConfigJson } from "../../services/config";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import { useConfigJson } from "@/services/config";
 
 export default function BackupConfigYamlButton({
   settings = {},
 }: {
   settings?: OrganizationSettings;
 }) {
-  const { datasources, metrics, dimensions } = useDefinitions();
+  const { datasources, metrics, dimensions, segments } = useDefinitions();
 
   const config = useConfigJson({
     datasources,
     metrics,
     dimensions,
     settings,
+    segments,
   });
 
   const href = useMemo(() => {

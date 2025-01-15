@@ -1,9 +1,8 @@
-import React, { Children, FC } from "react";
-import styles from "./RightRailSectionGroup.module.scss";
-import SortedTags from "../Tags/SortedTags";
+import React, { Children, CSSProperties, FC, ReactNode } from "react";
+import SortedTags from "@/components/Tags/SortedTags";
 
 const RightRailSectionGroup: FC<{
-  title?: string;
+  title?: string | ReactNode;
   type?:
     | "badge"
     | "code"
@@ -16,6 +15,9 @@ const RightRailSectionGroup: FC<{
   empty?: string;
   badgeStyle?: string;
   className?: string;
+  style?: CSSProperties;
+  children?: ReactNode;
+  titleClassName?: string;
 }> = ({
   children,
   title = "",
@@ -23,6 +25,8 @@ const RightRailSectionGroup: FC<{
   empty = "None",
   badgeStyle = "",
   className = "",
+  style,
+  titleClassName = "",
 }) => {
   let hasChildren = type === "onoff" || !!children;
   if (Array.isArray(children)) {
@@ -31,12 +35,15 @@ const RightRailSectionGroup: FC<{
   }
 
   return (
-    <div className={`mb-2 ${className}`}>
-      {title && <span className={`mr-2 ${styles.title}`}>{title}:</span>}
+    <div className={`mb-2 ${className}`} style={style}>
+      {title && (
+        <span className={`mr-2 text-muted ${titleClassName}`}>{title}:</span>
+      )}
       {hasChildren ? (
         <>
           {type === "tags" && (
             <SortedTags
+              // @ts-expect-error TS(2533) If you come across this, please fix it!: Object is possibly 'null' or 'undefined'.
               tags={Children.map(children, (child) => child + "").filter(
                 Boolean
               )}

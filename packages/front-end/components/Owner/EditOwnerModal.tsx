@@ -1,14 +1,15 @@
 import { FC } from "react";
-import Modal from "../Modal";
 import { useForm } from "react-hook-form";
-import Field from "../Forms/Field";
-import useMembers from "../../hooks/useMembers";
+import useMembers from "@/hooks/useMembers";
+import Modal from "@/components/Modal";
+import Field from "@/components/Forms/Field";
 
 const EditOwnerModal: FC<{
   owner: string;
   save: (ownerName: string) => Promise<void>;
   cancel: () => void;
-}> = ({ owner, save, cancel }) => {
+  mutate: () => void;
+}> = ({ owner, save, cancel, mutate }) => {
   const { memberUsernameOptions } = useMembers();
   const form = useForm({
     defaultValues: {
@@ -18,11 +19,13 @@ const EditOwnerModal: FC<{
 
   return (
     <Modal
+      trackingEventModalType=""
       header={"Edit Owner"}
       open={true}
       close={cancel}
       submit={form.handleSubmit(async (data) => {
         await save(data.owner);
+        mutate();
       })}
       cta="Save"
     >

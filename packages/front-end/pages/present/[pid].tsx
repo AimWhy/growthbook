@@ -1,14 +1,14 @@
 import React from "react";
 import dynamic from "next/dynamic";
-import useApi from "../../hooks/useApi";
 import { useRouter } from "next/router";
-import LoadingOverlay from "../../components/LoadingOverlay";
 import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
 import { PresentationInterface } from "back-end/types/presentation";
-import useSwitchOrg from "../../services/useSwitchOrg";
 import { ExperimentSnapshotInterface } from "back-end/types/experiment-snapshot";
+import useSwitchOrg from "@/services/useSwitchOrg";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import useApi from "@/hooks/useApi";
 const DynamicPresentation = dynamic(
-  () => import("../../components/Share/Presentation"),
+  () => import("@/components/Share/Presentation"),
   {
     ssr: false,
     //loading: () => (<p>Loading...</p>) // this causes a lint error
@@ -26,8 +26,7 @@ const PresentPage = (): React.ReactElement => {
       snapshot?: ExperimentSnapshotInterface;
     }[];
   }>(`/presentation/${pid}`);
-
-  useSwitchOrg(pdata?.presentation?.organization);
+  useSwitchOrg(pdata?.presentation?.organization || null);
 
   if (error) {
     return <div className="alert alert-danger">An error occurred</div>;
@@ -40,12 +39,10 @@ const PresentPage = (): React.ReactElement => {
   }
 
   return (
-    <>
-      <DynamicPresentation
-        presentation={pdata.presentation}
-        experiments={pdata.experiments}
-      />
-    </>
+    <DynamicPresentation
+      presentation={pdata.presentation}
+      experiments={pdata.experiments}
+    />
   );
 };
 export default PresentPage;

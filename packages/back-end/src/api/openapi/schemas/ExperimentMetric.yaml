@@ -1,0 +1,24 @@
+type: object
+required:
+  - metricId
+  - overrides
+properties:
+  metricId:
+    type: string
+  overrides:
+    type: object
+    properties:
+      delayHours:
+        type: number
+      windowHours:
+        type: number
+      window:
+        type: string
+        enum: 
+          - 'conversion'
+          - 'lookback'
+          - ''
+      winRiskThreshold:
+        type: number
+      loseRiskThreshold:
+        type: number

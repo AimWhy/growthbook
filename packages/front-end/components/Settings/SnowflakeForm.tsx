@@ -1,11 +1,15 @@
-import { FC, ChangeEventHandler } from "react";
+import { FC, ChangeEventHandler, useState } from "react";
 import { SnowflakeConnectionParams } from "back-end/types/integrations/snowflake";
+import Tooltip from "@/components/Tooltip/Tooltip";
+import Toggle from "@/components/Forms/Toggle";
 
 const SnowflakeForm: FC<{
   params: Partial<SnowflakeConnectionParams>;
   existing: boolean;
   onParamChange: ChangeEventHandler<HTMLInputElement>;
-}> = ({ params, existing, onParamChange }) => {
+  onManualParamChange: (name: string, value: string) => void;
+}> = ({ params, existing, onParamChange, onManualParamChange }) => {
+  const [useAccessUrl, setUseAccessUrl] = useState(!!params.accessUrl);
   return (
     <div className="row">
       <div className="form-group col-md-12">
@@ -34,8 +38,9 @@ const SnowflakeForm: FC<{
       <div className="form-group col-md-12">
         <label>Password</label>
         <input
-          type="password"
-          className="form-control"
+          type="text"
+          className="form-control password-presentation"
+          autoComplete="off"
           name="password"
           required={!existing}
           value={params.password || ""}
@@ -66,17 +71,6 @@ const SnowflakeForm: FC<{
         />
       </div>
       <div className="form-group col-md-12">
-        <label>Warehouse</label>
-        <input
-          type="text"
-          className="form-control"
-          name="warehouse"
-          required
-          value={params.warehouse || ""}
-          onChange={onParamChange}
-        />
-      </div>
-      <div className="form-group col-md-12">
         <label>Role</label>
         <input
           type="text"
@@ -86,6 +80,54 @@ const SnowflakeForm: FC<{
           onChange={onParamChange}
         />
       </div>
+      <div className="form-group col-md-12">
+        <label>
+          Warehouse (Optional){" "}
+          <Tooltip body="If no Warehouse is specified, queries will be executed in the default Warehouse for your User, set in Snowflake." />
+        </label>
+        <input
+          type="text"
+          className="form-control"
+          name="warehouse"
+          value={params.warehouse || ""}
+          onChange={onParamChange}
+          placeholder=""
+        />
+      </div>
+      <div className="col-md-12">
+        <div className="form-group">
+          <label htmlFor="access-url" className="mr-2">
+            Use Access URL (Optional)
+          </label>
+          <Toggle
+            id="access-url"
+            label="Use Access URL (Optional)"
+            value={useAccessUrl}
+            setValue={(v) => {
+              setUseAccessUrl(v);
+              if (!v) {
+                onManualParamChange("accessUrl", "");
+              }
+            }}
+          />
+        </div>
+      </div>
+      {useAccessUrl ? (
+        <div className="form-group col-md-12">
+          <label>
+            Access URL{" "}
+            <Tooltip body="Overrides Account to point GrowthBook at a specific URL" />
+          </label>
+          <input
+            type="text"
+            className="form-control"
+            name="accessUrl"
+            required
+            value={params.accessUrl || ""}
+            onChange={onParamChange}
+          />
+        </div>
+      ) : null}
     </div>
   );
 };

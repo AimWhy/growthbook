@@ -13,10 +13,14 @@ yarn-error.log*
 uploads
 packages/back-end/globalConfig.json
 packages/back-end/dummy
+packages/sdk-js/scripts/test-cases--typed.json
 config.yml
-.vscode
+.vscode/*
+!.vscode/launch.json
 packages/stats/notebooks
 buildinfo/
+back-end-dist/
+*.tsbuildinfo
 
 # Python compiled files
 __pycache__/
@@ -29,3 +33,13 @@ coverage.xml
 
 # Python virtual environment
 venv/
+.eslintcache
+
+# Docs
+docs/build
+.docusaurus
+.cache-loader
+packages/back-end/src/api/openapi/openapi.tmp.yaml
+
+# package lock files
+package-lock.json

@@ -1,28 +1,27 @@
 import { ReportInterface } from "back-end/types/report";
 import Link from "next/link";
 import React from "react";
-import { ago, datetime } from "../../services/dates";
 import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
-import useApi from "../../hooks/useApi";
-import { useAuth } from "../../services/auth";
 import { useRouter } from "next/router";
-import DeleteButton from "../DeleteButton";
-import usePermissions from "../../hooks/usePermissions";
-import useUser from "../../hooks/useUser";
-import { useSnapshot } from "./SnapshotProvider";
-import Button from "../Button";
-import { GBAddCircle } from "../Icons";
+import { ago, datetime } from "shared/dates";
+import { FaExclamationTriangle } from "react-icons/fa";
+import useApi from "@/hooks/useApi";
+import { useAuth } from "@/services/auth";
+import { useUser } from "@/services/UserContext";
+import DeleteButton from "@/components/DeleteButton/DeleteButton";
+import Tooltip from "@/components/Tooltip/Tooltip";
+import usePermissionsUtil from "@/hooks/usePermissionsUtils";
+import ShareStatusBadge from "@/components/Report/ShareStatusBadge";
 
 export default function ExperimentReportsList({
   experiment,
 }: {
   experiment: ExperimentInterfaceStringDates;
-}): React.ReactElement {
+}) {
   const router = useRouter();
   const { apiCall } = useAuth();
-  const permissions = usePermissions();
+  const permissionsUtil = usePermissionsUtil();
   const { userId, users } = useUser();
-  const { snapshot } = useSnapshot();
 
   const { data, error, mutate } = useApi<{
     reports: ReportInterface[];
@@ -38,64 +37,55 @@ export default function ExperimentReportsList({
   }
 
   const { reports } = data;
+  const isAdmin = permissionsUtil.canSuperDeleteReport();
 
-  if (!reports.length) {
+  const filteredReports = reports
+    .map((report) => {
+      const isOwner = userId === report?.userId || !report?.userId;
+      const canDelete = isOwner || isAdmin;
+      const show = isOwner
+        ? true
+        : report.type === "experiment"
+        ? report.status === "published"
+        : report.shareLevel === "public" ||
+          report.shareLevel === "organization";
+      const showDelete = report.type === "experiment" ? isAdmin : canDelete;
+      return { report, show, showDelete, isOwner };
+    })
+    .filter((fr) => fr.show);
+
+  if (!filteredReports.length) {
     return null;
   }
 
-  const hasData = snapshot?.results?.[0]?.variations?.length > 0;
-  const hasUserQuery = snapshot && !("skipPartialData" in snapshot);
-  const canCreateReports =
-    hasData && snapshot?.queries && !hasUserQuery && permissions.createAnalyses;
-
   return (
-    <div>
-      <div className="row align-items-center mb-2">
-        <div className="col">
-          <h3 className="mb-0">Custom Reports</h3>
-        </div>
-        {canCreateReports && (
-          <div className="col-auto">
-            <Button
-              className="btn btn-primary float-right"
-              color="outline-info"
-              onClick={async () => {
-                const res = await apiCall<{ report: ReportInterface }>(
-                  `/experiments/report/${snapshot.id}`,
-                  {
-                    method: "POST",
-                  }
-                );
-
-                if (!res.report) {
-                  throw new Error("Failed to create report");
-                }
-
-                await router.push(`/report/${res.report.id}`);
-              }}
-            >
-              <span className="h4 pr-2 m-0 d-inline-block align-top">
-                <GBAddCircle />
-              </span>
-              New Custom Report
-            </Button>
-          </div>
-        )}
-      </div>
+    <div className="px-4 mb-4">
       <table className="table appbox gbtable table-hover mb-0">
         <thead>
           <tr>
             <th>Title</th>
             <th>Description</th>
+            <th>Status</th>
             <th className="d-none d-md-table-cell">Last Updated </th>
             <th>By</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          {reports.map((report) => {
-            const user = users.get(report.userId);
+          {filteredReports.map((filteredReport) => {
+            const report = filteredReport.report;
+            const user = report.userId ? users.get(report.userId) : null;
             const name = user ? user.name : "";
+            const status =
+              report.type === "experiment"
+                ? report.status === "private"
+                  ? "private"
+                  : "organization"
+                : report.shareLevel === "public"
+                ? "public"
+                : report.shareLevel === "private"
+                ? "private"
+                : "organization";
             return (
               <tr key={report.id} className="">
                 <td
@@ -105,11 +95,23 @@ export default function ExperimentReportsList({
                     router.push(`/report/${report.id}`);
                   }}
                 >
-                  <Link href={`/report/${report.id}`}>
-                    <a className={`text-dark font-weight-bold`}>
+                  <div className="d-flex align-items-center">
+                    {report.type === "experiment" && report.error ? (
+                      <Tooltip
+                        body={report.error}
+                        className="d-flex align-items-center"
+                      >
+                        <FaExclamationTriangle color="red" className="mr-2" />
+                      </Tooltip>
+                    ) : null}
+
+                    <Link
+                      href={`/report/${report.id}`}
+                      className={`text-dark font-weight-bold`}
+                    >
                       {report.title}
-                    </a>
-                  </Link>
+                    </Link>
+                  </div>
                 </td>
                 <td
                   className="cursor-pointer"
@@ -118,9 +120,20 @@ export default function ExperimentReportsList({
                     router.push(`/report/${report.id}`);
                   }}
                 >
-                  <Link href={`/report/${report.id}`}>
-                    <a className={`text-dark`}>{report.description}</a>
+                  <Link href={`/report/${report.id}`} className={`text-dark`}>
+                    {report.description}
                   </Link>
+                </td>
+                <td>
+                  <ShareStatusBadge
+                    shareLevel={status}
+                    editLevel={
+                      report.type === "experiment-snapshot"
+                        ? report.editLevel
+                        : "organization"
+                    }
+                    isOwner={filteredReport.isOwner}
+                  />
                 </td>
                 <td
                   title={datetime(report.dateUpdated)}
@@ -130,27 +143,24 @@ export default function ExperimentReportsList({
                 </td>
                 <td>{name}</td>
                 <td style={{ width: 50 }}>
-                  {(permissions.superDelete || report.userId === userId) && (
-                    <>
-                      <DeleteButton
-                        displayName="Custom Report"
-                        link={true}
-                        className="fade-hover"
-                        text=""
-                        useIcon={true}
-                        onClick={async () => {
-                          await apiCall<{ status: number; message?: string }>(
-                            `/report/${report.id}`,
-                            {
-                              method: "DELETE",
-                              //body: JSON.stringify({ id: report.id }),
-                            }
-                          );
-                          mutate();
-                        }}
-                      />
-                    </>
-                  )}
+                  {filteredReport.showDelete ? (
+                    <DeleteButton
+                      displayName="Custom Report"
+                      link={true}
+                      className="fade-hover"
+                      text=""
+                      useIcon={true}
+                      onClick={async () => {
+                        await apiCall<{ status: number; message?: string }>(
+                          `/report/${report.id}`,
+                          {
+                            method: "DELETE",
+                          }
+                        );
+                        mutate();
+                      }}
+                    />
+                  ) : null}
                 </td>
               </tr>
             );

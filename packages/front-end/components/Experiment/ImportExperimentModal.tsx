@@ -1,16 +1,20 @@
 import { FC, useEffect, useState } from "react";
-import NewExperimentForm from "./NewExperimentForm";
-import ImportExperimentList from "./ImportExperimentList";
 import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
-import Modal from "../Modal";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import { useAuth } from "../../services/auth";
+import { isProjectListValidForProject } from "shared/util";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import { useAuth } from "@/services/auth";
+import useOrgSettings from "@/hooks/useOrgSettings";
+import Modal from "@/components/Modal";
+import SelectField from "@/components/Forms/SelectField";
+import Callout from "@/components/Radix/Callout";
+import ImportExperimentList from "./ImportExperimentList";
+import NewExperimentForm from "./NewExperimentForm";
 
 const ImportExperimentModal: FC<{
   onClose: () => void;
   initialValue?: Partial<ExperimentInterfaceStringDates>;
   importMode?: boolean;
-  source?: string;
+  source: string;
   fromFeature?: boolean;
 }> = ({
   onClose,
@@ -19,23 +23,40 @@ const ImportExperimentModal: FC<{
   source,
   fromFeature = false,
 }) => {
-  const { datasources } = useDefinitions();
+  const settings = useOrgSettings();
+  const { datasources, project } = useDefinitions();
   const [
     selected,
     setSelected,
-  ] = useState<null | Partial<ExperimentInterfaceStringDates>>(initialValue);
+  ] = useState<null | Partial<ExperimentInterfaceStringDates>>(
+    initialValue ?? null
+  );
+  const [error, setError] = useState<string | null>(null);
   const [importModal, setImportModal] = useState<boolean>(importMode);
   const [datasourceId, setDatasourceId] = useState(() => {
-    if (!datasources) return null;
-    return (
-      datasources.filter((d) => d.properties.pastExperiments)[0]?.id ?? null
-    );
+    const validDatasources = datasources
+      .filter((d) => d.properties?.pastExperiments)
+      .filter((d) => isProjectListValidForProject(d.projects, project));
+
+    if (!validDatasources?.length) return null;
+
+    if (settings?.defaultDataSource) {
+      const ds = validDatasources.find(
+        (d) => d.id === settings.defaultDataSource
+      );
+      if (ds) {
+        return ds.id;
+      }
+    }
+
+    return validDatasources[0].id;
   });
-  const [importId, setImportId] = useState(null);
+  const [importId, setImportId] = useState<string | null>(null);
 
   const { apiCall } = useAuth();
 
   const getImportId = async () => {
+    setError(null);
     if (datasourceId) {
       try {
         const res = await apiCall<{ id: string }>("/experiments/import", {
@@ -48,6 +69,9 @@ const ImportExperimentModal: FC<{
           setImportId(res.id);
         }
       } catch (e) {
+        setError(
+          e.message ?? "An error occurred. Please refresh and try again."
+        );
         console.error(e);
       }
     }
@@ -59,7 +83,7 @@ const ImportExperimentModal: FC<{
   if (selected || !importModal || !datasourceId) {
     return (
       <NewExperimentForm
-        initialValue={selected}
+        initialValue={selected ?? undefined}
         onClose={() => onClose()}
         source={source}
         isImport={!!selected}
@@ -70,16 +94,17 @@ const ImportExperimentModal: FC<{
 
   return (
     <Modal
-      header="Add Experiment"
+      trackingEventModalType="import-experiment"
+      header="Import Experiment"
       open={true}
-      size="lg"
+      size="max"
       close={() => onClose()}
     >
-      <div className="alert alert-info">
-        Prefer to start with a blank experiment instead?{" "}
+      <Callout status="info" mb="3">
+        Don&apos;t see your experiment listed below?{" "}
         <a
-          href="#"
-          className="alert-link"
+          role="button"
+          className="link"
           onClick={(e) => {
             e.preventDefault();
             setImportModal(false);
@@ -87,7 +112,7 @@ const ImportExperimentModal: FC<{
         >
           Create From Scratch
         </a>
-      </div>
+      </Callout>
       <h2>Import from Data source</h2>
       {importId && (
         <ImportExperimentList
@@ -96,9 +121,21 @@ const ImportExperimentModal: FC<{
           }}
           changeDatasource={setDatasourceId}
           importId={importId}
-          hideImported={true}
         />
       )}
+      {error ? (
+        <>
+          <Callout status="error" mb="3">
+            {error}
+          </Callout>
+          <SelectField
+            label="Choose a Data Source"
+            value={datasourceId}
+            onChange={(value) => setDatasourceId(value)}
+            options={datasources.map((d) => ({ label: d.name, value: d.id }))}
+          />
+        </>
+      ) : null}
     </Modal>
   );
 };

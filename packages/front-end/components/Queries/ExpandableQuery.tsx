@@ -1,10 +1,21 @@
 import { FC } from "react";
 import { QueryInterface } from "back-end/types/query";
 import { formatDistanceStrict } from "date-fns";
-import { FaCircle, FaExclamationTriangle, FaCheck } from "react-icons/fa";
-import Code from "../Code";
-import clsx from "clsx";
-import { getValidDate } from "../../services/dates";
+import {
+  FaCircle,
+  FaExclamationTriangle,
+  FaCheck,
+  FaSquare,
+} from "react-icons/fa";
+import { getValidDate } from "shared/dates";
+import { isFactMetricId } from "shared/experiments";
+import { FaBoltLightning } from "react-icons/fa6";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import Code from "@/components/SyntaxHighlighting/Code";
+import Tooltip from "@/components/Tooltip/Tooltip";
+import Callout from "@/components/Radix/Callout";
+import HelperText from "@/components/Radix/HelperText";
+import QueryStatsRow from "./QueryStatsRow";
 
 const ExpandableQuery: FC<{
   query: QueryInterface;
@@ -19,28 +30,56 @@ const ExpandableQuery: FC<{
     }
   }
 
+  const { getFactMetricById } = useDefinitions();
+
   return (
     <div className="mb-4">
-      <h4>
-        {query.status === "running" && <FaCircle className="text-info mr-2" />}
+      <h4 className="d-flex align-items-top">
+        {query.status === "running" && (
+          <FaCircle className="text-info mr-2" title="Running" />
+        )}
+        {query.status === "queued" && (
+          <FaSquare className="text-secondary mr-2" title="Queued" />
+        )}
         {query.status === "failed" && (
-          <FaExclamationTriangle className="text-danger mr-2" />
+          <FaExclamationTriangle className="text-danger mr-2" title="Failed" />
         )}
         {query.status === "succeeded" && (
-          <FaCheck className="text-success mr-2" />
+          <FaCheck className="text-success mr-2" title="Succeeded" />
         )}
-        {title}
+        <div className="mr-1">{title}</div>
         <span style={{ fontWeight: "normal" }}>
           {title && " - "}
           Query {i + 1} of {total}
         </span>
+        {query.queryType === "experimentMultiMetric" && (
+          <div className="ml-auto">
+            <Tooltip
+              body={
+                <>
+                  <h5>Fact Table Query Optimization</h5>
+                  <p>
+                    Multiple metrics in the same Fact Table are being combined
+                    into a single query, which is much faster and more
+                    efficient.
+                  </p>
+                  <p>
+                    This is a new feature, so please report any issues you
+                    encounter. You can disable this optimization under{" "}
+                    <strong>Settings</strong> -&gt; <strong>General</strong>{" "}
+                    -&gt; <strong>Experiment Settings</strong>.
+                  </p>
+                </>
+              }
+            >
+              <span className="badge badge-warning">
+                <FaBoltLightning /> Optimized
+              </span>
+            </Tooltip>
+          </div>
+        )}
       </h4>
-      <Code
-        language={query.language}
-        code={query.query}
-        expandable={true}
-        lineNumbers={true}
-      />
+      <Code language={query.language} code={query.query} expandable={true} />
       {query.error && (
         <div className="alert alert-danger">
           <pre className="m-0 p-0" style={{ whiteSpace: "pre-wrap" }}>
@@ -69,7 +108,25 @@ const ExpandableQuery: FC<{
                     return (
                       <tr key={i}>
                         <th>{i}</th>
+                        {/* @ts-expect-error TS(2532) If you come across this, please fix it!: Object is possibly 'undefined'. */}
                         {Object.keys(query.rawResult[0]).map((k) => {
+                          const val = row[k];
+                          if (typeof val === "string" && isFactMetricId(val)) {
+                            const factMetric = getFactMetricById(val);
+                            if (factMetric) {
+                              return (
+                                <td key={k}>
+                                  <span
+                                    className="badge badge-secondary"
+                                    title={val}
+                                  >
+                                    {factMetric?.name || val}
+                                  </span>
+                                </td>
+                              );
+                            }
+                          }
+
                           return (
                             <td key={k}>
                               {JSON.stringify(row[k]) ?? (
@@ -85,30 +142,62 @@ const ExpandableQuery: FC<{
               </table>
             </div>
           ) : (
-            <div className={clsx("alert alert-info mb-1")}>
-              <em>No rows returned</em>
-            </div>
+            <Callout status="warning" my="3">
+              No rows returned
+            </Callout>
           )}
         </>
       )}
       {query.status === "succeeded" && (
-        <small>
-          <em>
-            Took{" "}
-            {formatDistanceStrict(
-              getValidDate(query.startedAt),
-              getValidDate(query.finishedAt)
-            )}
-          </em>
-        </small>
+        <div>
+          {query.statistics ? (
+            <QueryStatsRow queries={[query]} />
+          ) : (
+            <div className="row">
+              <div className="col-auto mb-2">
+                <em>Total time</em>:{" "}
+                <strong>
+                  {formatDistanceStrict(
+                    getValidDate(query.startedAt),
+                    getValidDate(query.finishedAt)
+                  )}
+                </strong>
+              </div>
+              <div className="col-auto mb-2">
+                <em>Time queued</em>:{" "}
+                <strong>
+                  {formatDistanceStrict(
+                    getValidDate(query.createdAt),
+                    getValidDate(query.startedAt)
+                  )}
+                </strong>
+              </div>
+            </div>
+          )}
+        </div>
       )}
       {query.status === "running" && (
-        <div className="alert alert-info">
-          <em>
+        <>
+          <HelperText status="info" mb="2">
             Running for{" "}
             {formatDistanceStrict(getValidDate(query.startedAt), new Date())}
-          </em>
-        </div>
+          </HelperText>
+          {query.dependencies?.length && !query.cachedQueryUsed ? (
+            <HelperText status="info" mb="2">
+              Was queued for{" "}
+              {formatDistanceStrict(
+                getValidDate(query.createdAt),
+                getValidDate(query.startedAt)
+              )}
+            </HelperText>
+          ) : null}
+        </>
+      )}
+      {query.status == "queued" && (
+        <HelperText status="info" mb="3">
+          Queued for{" "}
+          {formatDistanceStrict(getValidDate(query.createdAt), new Date())}
+        </HelperText>
       )}
     </div>
   );

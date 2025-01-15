@@ -1,11 +1,11 @@
 import { FC } from "react";
 import { IdeaInterface } from "back-end/types/idea";
 import { useForm } from "react-hook-form";
-import Modal from "../Modal";
-import { useAuth } from "../../services/auth";
-import TagsInput from "../Tags/TagsInput";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import Field from "../Forms/Field";
+import { useAuth } from "@/services/auth";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import Modal from "@/components/Modal";
+import TagsInput from "@/components/Tags/TagsInput";
+import Field from "@/components/Forms/Field";
 
 const IdeaForm: FC<{
   idea: Partial<IdeaInterface>;
@@ -43,6 +43,7 @@ const IdeaForm: FC<{
 
   return (
     <Modal
+      trackingEventModalType=""
       header={edit ? "Edit Idea" : "New Idea"}
       close={close}
       open={true}

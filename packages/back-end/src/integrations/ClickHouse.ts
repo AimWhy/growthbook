@@ -1,10 +1,14 @@
-import { decryptDataSourceParams } from "../services/datasource";
-import { ClickHouse as ClickHouseClient } from "clickhouse";
+import { createClient, ResponseJSON } from "@clickhouse/client";
+import { decryptDataSourceParams } from "back-end/src/services/datasource";
+import { ClickHouseConnectionParams } from "back-end/types/integrations/clickhouse";
+import { QueryResponse } from "back-end/src/types/Integration";
+import { getHost } from "back-end/src/util/sql";
 import SqlIntegration from "./SqlIntegration";
-import { ClickHouseConnectionParams } from "../../types/integrations/clickhouse";
 
 export default class ClickHouse extends SqlIntegration {
-  params: ClickHouseConnectionParams;
+  params!: ClickHouseConnectionParams;
+  requiresDatabase = false;
+  requiresSchema = false;
   setParams(encryptedParams: string) {
     this.params = decryptDataSourceParams<ClickHouseConnectionParams>(
       encryptedParams
@@ -22,35 +26,41 @@ export default class ClickHouse extends SqlIntegration {
   getSensitiveParamKeys(): string[] {
     return ["password"];
   }
-  async runQuery(sql: string) {
-    const client = new ClickHouseClient({
-      url: this.params.url,
-      port: this.params.port,
-      basicAuth: this.params.username
-        ? {
-            username: this.params.username,
-            password: this.params.password,
-          }
-        : null,
-      format: "json",
-      debug: false,
-      raw: false,
-      config: {
-        database: this.params.database,
-      },
-      reqParams: {
-        headers: {
-          "x-clickhouse-format": "JSON",
-        },
+
+  async runQuery(sql: string): Promise<QueryResponse> {
+    const client = createClient({
+      host: getHost(this.params.url, this.params.port),
+      username: this.params.username,
+      password: this.params.password,
+      database: this.params.database,
+      application: "GrowthBook",
+      request_timeout: 3620_000,
+      clickhouse_settings: {
+        max_execution_time: Math.min(
+          this.params.maxExecutionTime ?? 1800,
+          3600
+        ),
       },
     });
-    return Array.from(await client.query(sql).toPromise());
+    const results = await client.query({ query: sql, format: "JSON" });
+    // eslint-disable-next-line
+    const data: ResponseJSON<Record<string, any>[]> = await results.json();
+    return {
+      rows: data.data ? data.data : [],
+      statistics: data.statistics
+        ? {
+            executionDurationMs: data.statistics.elapsed,
+            rowsProcessed: data.statistics.rows_read,
+            bytesProcessed: data.statistics.bytes_read,
+          }
+        : undefined,
+    };
   }
   toTimestamp(date: Date) {
     return `toDateTime('${date
       .toISOString()
       .substr(0, 19)
-      .replace("T", " ")}')`;
+      .replace("T", " ")}', 'UTC')`;
   }
   addTime(
     col: string,
@@ -66,16 +76,46 @@ export default class ClickHouse extends SqlIntegration {
   dateDiff(startCol: string, endCol: string) {
     return `dateDiff('day', ${startCol}, ${endCol})`;
   }
-  stddev(col: string) {
-    return `stddevSamp(${col})`;
-  }
   formatDate(col: string): string {
     return `formatDateTime(${col}, '%F')`;
+  }
+  formatDateTimeString(col: string): string {
+    return `formatDateTime(${col}, '%Y-%m-%d %H:%i:%S.%f')`;
   }
   ifElse(condition: string, ifTrue: string, ifFalse: string) {
     return `if(${condition}, ${ifTrue}, ${ifFalse})`;
   }
+  castToDate(col: string): string {
+    const columType = col === "NULL" ? "Nullable(DATE)" : "DATE";
+    return `CAST(${col} AS ${columType})`;
+  }
   castToString(col: string): string {
     return `toString(${col})`;
+  }
+  ensureFloat(col: string): string {
+    return `toFloat64(${col})`;
+  }
+  hasCountDistinctHLL(): boolean {
+    return true;
+  }
+  hllAggregate(col: string): string {
+    return `uniqState(${col})`;
+  }
+  hllReaggregate(col: string): string {
+    return `uniqMergeState(${col})`;
+  }
+  hllCardinality(col: string): string {
+    return `finalizeAggregation(${col})`;
+  }
+  approxQuantile(value: string, quantile: string | number): string {
+    return `quantile(${quantile})(${value})`;
+    // TODO explore gains to using `quantiles`
+  }
+  getInformationSchemaWhereClause(): string {
+    if (!this.params.database)
+      throw new Error(
+        "No database name provided in ClickHouse connection. Please add a database by editing the connection settings."
+      );
+    return `table_schema IN ('${this.params.database}')`;
   }
 }
