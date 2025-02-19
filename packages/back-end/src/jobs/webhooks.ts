@@ -1,11 +1,19 @@
-import Agenda, { Job } from "agenda";
-import { WebhookModel } from "../models/WebhookModel";
 import { createHmac } from "crypto";
-import fetch from "node-fetch";
-import { getExperimentOverrides } from "../services/organizations";
-import { getFeatureDefinitions } from "../services/features";
-import { WebhookInterface } from "../../types/webhook";
-import { CRON_ENABLED } from "../util/secrets";
+import Agenda, { Job } from "agenda";
+import { ReqContext } from "back-end/types/organization";
+import {
+  getContextForAgendaJobByOrgId,
+  getExperimentOverrides,
+} from "back-end/src/services/organizations";
+import { getFeatureDefinitions } from "back-end/src/services/features";
+import { CRON_ENABLED } from "back-end/src/util/secrets";
+import { SDKPayloadKey } from "back-end/types/sdk-payload";
+import {
+  findAllLegacySdkWebhooks,
+  findSdkWebhookByIdAcrossOrgs,
+  setLastSdkWebhookError,
+} from "back-end/src/models/WebhookModel";
+import { cancellableFetch } from "back-end/src/util/http.util";
 
 const WEBHOOK_JOB_NAME = "fireWebhook";
 type WebhookJob = Job<{
@@ -22,27 +30,29 @@ export default function (ag: Agenda) {
     const webhookId = job.attrs.data?.webhookId;
     if (!webhookId) return;
 
-    const webhook = await WebhookModel.findOne({
-      id: webhookId,
-    });
-
+    const webhook = await findSdkWebhookByIdAcrossOrgs(webhookId);
     if (!webhook) return;
 
-    const features = await getFeatureDefinitions(
-      webhook.organization,
-      webhook.environment === undefined ? "production" : webhook.environment,
-      webhook.project || ""
-    );
+    const context = await getContextForAgendaJobByOrgId(webhook.organization);
+
+    const { features, dateUpdated } = await getFeatureDefinitions({
+      context,
+      capabilities: ["bucketingV2"],
+      environment:
+        webhook.environment === undefined ? "production" : webhook.environment,
+      projects: webhook.project ? [webhook.project] : [],
+    });
 
     // eslint-disable-next-line
     const body: any = {
       timestamp: Math.floor(Date.now() / 1000),
       features,
+      dateUpdated,
     };
 
     if (!webhook.featuresOnly) {
       const { overrides, expIdMapping } = await getExperimentOverrides(
-        webhook.organization,
+        context,
         webhook.project
       );
       body.overrides = overrides;
@@ -55,42 +65,38 @@ export default function (ag: Agenda) {
       .update(payload)
       .digest("hex");
 
-    const res = await fetch(webhook.endpoint, {
-      headers: {
-        "Content-Type": "application/json",
-        "X-GrowthBook-Signature": signature,
+    const res = await cancellableFetch(
+      webhook.endpoint,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "X-GrowthBook-Signature": signature,
+        },
+        method: "POST",
+        body: payload,
       },
-      method: "POST",
-      body: payload,
-    });
+      {
+        maxTimeMs: 30000,
+        maxContentSize: 1000,
+      }
+    );
 
-    if (!res.ok) {
-      const e = "POST returned an invalid status code: " + res.status;
-      webhook.set("error", e);
-      await webhook.save();
+    if (!res.responseWithoutBody.ok) {
+      const e =
+        res.stringBody ||
+        "POST returned an invalid status code: " +
+          res.responseWithoutBody.status;
+      await setLastSdkWebhookError(webhook, e);
       throw new Error(e);
     }
 
-    webhook.set("error", "");
-    webhook.set("lastSuccess", new Date());
-    await webhook.save();
+    await setLastSdkWebhookError(webhook, "");
   });
+
   agenda.on(
     "fail:" + WEBHOOK_JOB_NAME,
     async (error: Error, job: WebhookJob) => {
       if (!job.attrs.data) return;
-
-      // record the failure:
-      const webhookId = job.attrs.data?.webhookId;
-      if (webhookId) {
-        const webhook = await WebhookModel.findOne({
-          id: webhookId,
-        });
-        if (webhook) {
-          webhook.set("error", "Error: " + job.attrs.failReason || "unknown");
-          await webhook.save();
-        }
-      }
 
       // retry:
       const retryCount = job.attrs.data.retryCount;
@@ -116,38 +122,30 @@ export default function (ag: Agenda) {
   );
 }
 
-export async function queueWebhook(
-  orgId: string,
-  environments: string[],
-  projects: string[],
+export async function queueLegacySdkWebhooks(
+  context: ReqContext,
+  payloadKeys: SDKPayloadKey[],
   isFeature?: boolean
 ) {
   if (!CRON_ENABLED) return;
+  if (!payloadKeys.length) return;
 
-  const webhooks = await WebhookModel.find({
-    organization: orgId,
-  });
-
-  if (!webhooks) return;
+  const webhooks = await findAllLegacySdkWebhooks(context);
 
   for (let i = 0; i < webhooks.length; i++) {
-    const webhook: WebhookInterface = webhooks[i];
+    const webhook = webhooks[i];
 
-    // Skip if this webhook is for another project
-    if (webhook.project && !projects.includes(webhook.project)) {
-      continue;
-    }
-    // Legacy webhook without an environment, default to "production" only
+    // Skip if this webhook isn't affected by the changes
     if (
-      webhook.environment === undefined &&
-      !environments.includes("production")
+      !payloadKeys.some(
+        (key) =>
+          key.project === (webhook.project || "") &&
+          key.environment === (webhook.environment || "production")
+      )
     ) {
       continue;
     }
-    // Skip if this webhook is for another environment
-    if (webhook.environment && !environments.includes(webhook.environment)) {
-      continue;
-    }
+
     // Skip if this webhook is only for features and this isn't a feature event
     if (!isFeature && webhook.featuresOnly) {
       continue;

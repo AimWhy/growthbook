@@ -1,76 +1,155 @@
-import { FC, useState } from "react";
-import { useAuth } from "../../services/auth";
-import { datetime } from "../../services/dates";
-import LoadingOverlay from "../LoadingOverlay";
+import { useState } from "react";
+import { FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
+import { redirectWithTimeout, useAuth } from "@/services/auth";
+import Button from "@/components/Button";
+import { isCloud } from "@/services/env";
+import { useUser } from "@/services/UserContext";
+import UpgradeModal from "./UpgradeModal";
 
-const formatter = new Intl.NumberFormat();
-
-const SubscriptionInfo: FC<{
-  id: string;
-  qty: number;
-  trialEnd: Date;
-  status:
-    | "incomplete"
-    | "incomplete_expired"
-    | "trialing"
-    | "active"
-    | "past_due"
-    | "canceled"
-    | "unpaid";
-}> = ({ qty, trialEnd, status }) => {
+export default function SubscriptionInfo() {
   const { apiCall } = useAuth();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const {
+    subscription,
+    seatsInUse,
+    canSubscribe,
+    organization,
+    license,
+  } = useUser();
+
+  const [upgradeModal, setUpgradeModal] = useState(false);
+
+  //TODO: Remove this once we have moved the license off the organization
+  const stripeSubscription =
+    license?.stripeSubscription || organization?.subscription;
+
+  const nextBillDate = new Date(
+    (stripeSubscription?.current_period_end || 0) * 1000
+  ).toDateString();
+
+  const dateToBeCanceled = new Date(
+    (stripeSubscription?.cancel_at || 0) * 1000
+  ).toDateString();
+
+  const cancelationDate = new Date(
+    (stripeSubscription?.canceled_at || 0) * 1000
+  ).toDateString();
+
+  const pendingCancelation =
+    stripeSubscription?.status !== "canceled" &&
+    stripeSubscription?.cancel_at_period_end;
 
   return (
     <>
-      <div className="row align-items-center">
-        {loading && <LoadingOverlay />}
-        <div className="col-auto mb-3">
-          <strong>Status:</strong> {status}
-        </div>
-        {status === "trialing" && trialEnd && (
-          <div className="col-md-12 mb-3">
-            <strong>Trial Ends:</strong> {datetime(trialEnd)}
-          </div>
+      {upgradeModal && (
+        <UpgradeModal
+          close={() => setUpgradeModal(false)}
+          reason="Your subscription has expired."
+          source="billing-renew"
+        />
+      )}
+      <div className="col-auto mb-3">
+        <strong>Current Plan:</strong> {isCloud() ? "Cloud" : "Self-Hosted"} Pro
+        {subscription?.status === "trialing" && (
+          <>
+            {" "}
+            <em>(trial)</em>
+          </>
         )}
+      </div>
+      <div className="col-md-12 mb-3">
+        <strong>Number Of Seats:</strong> {seatsInUse || 0}
+      </div>
+      {subscription?.status !== "canceled" && !pendingCancelation && (
         <div className="col-md-12 mb-3">
-          <strong>Monthly Tracked Users:</strong> {formatter.format(qty * 1000)}
+          <div>
+            <strong>Next Bill Date: </strong>
+            {nextBillDate}
+          </div>
+          {subscription?.hasPaymentMethod === true ? (
+            <div
+              className="mt-3 px-3 py-2 alert alert-success row"
+              style={{ maxWidth: 650 }}
+            >
+              <div className="col-auto px-1">
+                <FaCheckCircle />
+              </div>
+              <div className="col">
+                You have a valid payment method on file. You will be billed
+                automatically on this date.
+              </div>
+            </div>
+          ) : subscription?.hasPaymentMethod === false ? (
+            <div
+              className="mt-3 px-3 py-2 alert alert-warning row"
+              style={{ maxWidth: 550 }}
+            >
+              <div className="col-auto px-1">
+                <FaExclamationTriangle />
+              </div>
+              <div className="col">
+                <p>
+                  You do not have a valid payment method on file. Your
+                  subscription will be cancelled on this date unless you add a
+                  valid payment method.
+                </p>
+                <p className="mb-0">
+                  Click <strong>View Plan Details</strong> below to add a
+                  payment method.
+                </p>
+              </div>
+            </div>
+          ) : null}
         </div>
-        <div className="col-md-12 mb-3">
-          <button
-            className="btn btn-primary"
-            onClick={async (e) => {
-              e.preventDefault();
-              if (loading) return;
-              setLoading(true);
-              setError(null);
-              try {
-                const res = await apiCall<{ url: string }>(
-                  `/subscription/manage`,
-                  {
-                    method: "POST",
-                  }
-                );
-                if (res && res.url) {
-                  window.location.href = res.url;
-                  return;
-                } else {
-                  throw new Error("Unknown response");
+      )}
+      {pendingCancelation && dateToBeCanceled && (
+        <div className="col-md-12 mb-3 alert alert-danger">
+          Your plan will be canceled, but is still available until the end of
+          your billing period on
+          {` ${dateToBeCanceled}.`}
+        </div>
+      )}
+      {subscription?.status === "canceled" && (
+        <div className="col-md-12 mb-3 alert alert-danger">
+          Your plan was canceled on {` ${cancelationDate}.`}
+        </div>
+      )}
+      <div className="col-md-12 mt-4 mb-3 d-flex flex-row px-0">
+        <div className="col-auto">
+          <Button
+            color="primary"
+            onClick={async () => {
+              const res = await apiCall<{ url: string }>(
+                `/subscription/manage`,
+                {
+                  method: "POST",
                 }
-              } catch (e) {
-                setError(e.message);
+              );
+              if (res && res.url) {
+                await redirectWithTimeout(res.url);
+              } else {
+                throw new Error("Unknown response");
               }
-              setLoading(false);
             }}
           >
-            Manage Subscription
-          </button>
+            {subscription?.status !== "canceled"
+              ? "View Plan Details"
+              : "View Previous Invoices"}
+          </Button>
         </div>
+        {subscription?.status === "canceled" && canSubscribe && (
+          <div className="col-auto">
+            <button
+              className="btn btn-success"
+              onClick={(e) => {
+                e.preventDefault();
+                setUpgradeModal(true);
+              }}
+            >
+              Renew Your Plan
+            </button>
+          </div>
+        )}
       </div>
-      {error && <div className="alert alert-danger">{error}</div>}
     </>
   );
-};
-
-export default SubscriptionInfo;
+}

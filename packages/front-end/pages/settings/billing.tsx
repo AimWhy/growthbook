@@ -1,52 +1,102 @@
-import Link from "next/link";
-import { FC } from "react";
-import { FaAngleLeft } from "react-icons/fa";
-import { SettingsApiResponse } from ".";
-import LoadingOverlay from "../../components/LoadingOverlay";
-import SubscriptionInfo from "../../components/Settings/SubscriptionInfo";
-import useApi from "../../hooks/useApi";
-import { isCloud } from "../../services/env";
+import { FC, useEffect, useState } from "react";
+import { LicenseInterface } from "enterprise";
+import SubscriptionInfo from "@/components/Settings/SubscriptionInfo";
+import UpgradeModal from "@/components/Settings/UpgradeModal";
+import { useUser } from "@/services/UserContext";
+import { useAuth } from "@/services/auth";
+import usePermissionsUtil from "@/hooks/usePermissionsUtils";
 
 const BillingPage: FC = () => {
-  const { data, error } = useApi<SettingsApiResponse>(`/organization`);
+  const [upgradeModal, setUpgradeModal] = useState(false);
 
-  if (!isCloud()) {
+  const permissionsUtil = usePermissionsUtil();
+
+  const { accountPlan, subscription, canSubscribe } = useUser();
+
+  const { apiCall } = useAuth();
+  const { refreshOrganization } = useUser();
+
+  useEffect(() => {
+    const refreshLicense = async () => {
+      const res = await apiCall<{
+        status: number;
+        license: LicenseInterface;
+      }>(`/license`, {
+        method: "GET",
+      });
+
+      if (res.status !== 200) {
+        throw new Error("There was an error fetching the license");
+      }
+      refreshOrganization();
+    };
+
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      // TODO: Get rid of the "org" route, once all license data has been moved off the orgs
+      if (urlParams.get("refreshLicense") || urlParams.get("org")) {
+        refreshLicense();
+      }
+    }
+  }, [apiCall, refreshOrganization]);
+
+  if (accountPlan === "enterprise") {
     return (
-      <div className="alert alert-info">
-        This page is not available for self-hosted installations.
+      <div className="container pagecontents">
+        <div className="alert alert-info">
+          This page is not available for enterprise customers. Please contact
+          your account rep for any billing questions or changes.
+        </div>
       </div>
     );
   }
 
-  if (error) {
+  if (!permissionsUtil.canManageBilling()) {
     return (
-      <div className="alert alert-danger">
-        An error occurred: {error.message}
+      <div className="container pagecontents">
+        <div className="alert alert-danger">
+          You do not have access to view this page.
+        </div>
       </div>
     );
-  }
-  if (!data) {
-    return <LoadingOverlay />;
   }
 
   return (
     <div className="container-fluid pagecontents">
-      <div className="mb-2">
-        <Link href="/settings">
-          <a>
-            <FaAngleLeft /> All Settings
-          </a>
-        </Link>
-      </div>
-      <h1>Billing Settings</h1>
+      {upgradeModal && (
+        <UpgradeModal
+          close={() => setUpgradeModal(false)}
+          reason=""
+          source="billing-free"
+        />
+      )}
 
+      <h1>Billing Settings</h1>
       <div className=" bg-white p-3 border">
-        {data.organization.subscription?.status ? (
-          <SubscriptionInfo {...data.organization.subscription} />
-        ) : (
-          <div className="alert alert-warning">
-            No subscription info found for your organization.
+        {subscription?.status ? (
+          <SubscriptionInfo />
+        ) : canSubscribe ? (
+          <div className="alert alert-warning mb-0">
+            <div className="d-flex align-items-center">
+              <div>
+                You are currently on the <strong>Free Plan</strong>.
+              </div>
+              <button
+                className="btn btn-primary ml-auto"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setUpgradeModal(true);
+                }}
+              >
+                Upgrade Now
+              </button>
+            </div>
           </div>
+        ) : (
+          <p>
+            Contact <a href="mailto:sales@growthbook.io">sales@growthbook.io</a>{" "}
+            to make changes to your subscription plan.
+          </p>
         )}
       </div>
     </div>

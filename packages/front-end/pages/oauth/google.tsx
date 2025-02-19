@@ -1,11 +1,11 @@
 import { FC, useEffect, useState } from "react";
-import LoadingOverlay from "../../components/LoadingOverlay";
-import DataSourceForm from "../../components/Settings/DataSourceForm";
 import { useRouter } from "next/router";
-import { useDefinitions } from "../../services/DefinitionsContext";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import DataSourceForm from "@/components/Settings/DataSourceForm";
+import { useDefinitions } from "@/services/DefinitionsContext";
 
 const Google: FC = () => {
-  const [code, setCode] = useState(null);
+  const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {

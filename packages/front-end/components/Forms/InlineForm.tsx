@@ -1,9 +1,8 @@
 import clsx from "clsx";
 import { ReactElement, useState } from "react";
-import LoadingOverlay from "../LoadingOverlay";
-import LoadingSpinner from "../LoadingSpinner";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import LoadingSpinner from "@/components/LoadingSpinner";
 
-// eslint-disable-next-line
 export default function InlineForm({
   editing,
   setEdit,
@@ -25,7 +24,7 @@ export default function InlineForm({
   canEdit?: boolean;
 }): ReactElement {
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const startEditing = () => {
     if (!canEdit) return;

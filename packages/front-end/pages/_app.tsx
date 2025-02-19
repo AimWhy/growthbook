@@ -1,31 +1,61 @@
+// NB: Order matters
+import "@radix-ui/themes/styles.css";
+import "@/styles/radix-config.css";
+import "@/styles/global-radix-overrides.scss";
+import "@/styles/global.scss";
+
 import { AppProps } from "next/app";
-import "../styles/global.scss";
-import { AuthProvider } from "../services/auth";
-import ProtectedPage from "../components/ProtectedPage";
-import Layout from "../components/Layout/Layout";
 import Head from "next/head";
-import { DefinitionsProvider } from "../services/DefinitionsContext";
-import { useEffect } from "react";
-import track from "../services/track";
-import { initEnv } from "../services/env";
-import { useState } from "react";
-import LoadingOverlay from "../components/LoadingOverlay";
+import React, { useEffect, useState } from "react";
+import { GrowthBookProvider } from "@growthbook/growthbook-react";
+import { growthbookTrackingPlugin } from "@growthbook/growthbook/plugins";
+import { Inter } from "next/font/google";
+import { OrganizationMessagesContainer } from "@/components/OrganizationMessages/OrganizationMessages";
+import { DemoDataSourceGlobalBannerContainer } from "@/components/DemoDataSourceGlobalBanner/DemoDataSourceGlobalBanner";
+import { PageHeadProvider } from "@/components/Layout/PageHead";
+import { RadixTheme } from "@/services/RadixTheme";
+import { AuthProvider, useAuth } from "@/services/auth";
+import ProtectedPage from "@/components/ProtectedPage";
+import {
+  DefinitionsGuard,
+  DefinitionsProvider,
+} from "@/services/DefinitionsContext";
+import {
+  getIngestorHost,
+  initEnv,
+  inTelemetryDebugMode,
+  isTelemetryEnabled,
+} from "@/services/env";
+import LoadingOverlay from "@/components/LoadingOverlay";
 import "diff2html/bundles/css/diff2html.min.css";
-import { GrowthBook, GrowthBookProvider } from "@growthbook/growthbook-react";
+import Layout from "@/components/Layout/Layout";
+import { AppearanceUIThemeProvider } from "@/services/AppearanceUIThemeProvider";
+import TopNavLite from "@/components/Layout/TopNavLite";
+import GetStartedProvider from "@/services/GetStartedProvider";
+import GuidedGetStartedBar from "@/components/Layout/GuidedGetStartedBar";
+import LayoutLite from "@/components/Layout/LayoutLite";
+import { growthbook } from "@/services/utils";
+import { UserContextProvider } from "@/services/UserContext";
+
+// Make useLayoutEffect isomorphic (for SSR)
+if (typeof window === "undefined") React.useLayoutEffect = React.useEffect;
+
+// If loading a variable font, you don't need to specify the font weight
+const inter = Inter({ subsets: ["latin"] });
 
 type ModAppProps = AppProps & {
-  Component: { noOrganization?: boolean; preAuth?: boolean };
+  Component: {
+    envReady?: boolean;
+    noOrganization?: boolean;
+    liteLayout?: boolean;
+    preAuth?: boolean;
+    preAuthTopNav?: boolean;
+    progressiveAuth?: boolean;
+    progressiveAuthTopNav?: boolean;
+    noLoadingOverlay?: boolean;
+    mainClassName?: string;
+  };
 };
-
-const growthbook = new GrowthBook({
-  realtimeKey: "key_prod_cb40dfcb0eb98e44",
-  trackingCallback: (experiment, result) => {
-    track("Experiment Viewed", {
-      experimentId: experiment.key,
-      variationId: result.variationId,
-    });
-  },
-});
 
 function App({
   Component,
@@ -36,10 +66,19 @@ function App({
   const [error, setError] = useState("");
 
   // hacky:
-  const parts = router.route.substr(1).split("/");
+  const parts = Component.mainClassName
+    ? [Component.mainClassName]
+    : router.route.substr(1).split("/");
 
   const organizationRequired = !Component.noOrganization;
   const preAuth = Component.preAuth || false;
+  const progressiveAuth = Component.progressiveAuth || false;
+  const preAuthTopNav = Component.preAuthTopNav || false;
+  const progressiveAuthTopNav = Component.progressiveAuthTopNav || false;
+  const liteLayout = Component.liteLayout || false;
+  const noLoadingOverlay = Component.noLoadingOverlay || false;
+
+  const { orgId } = useAuth();
 
   useEffect(() => {
     initEnv()
@@ -48,54 +87,138 @@ function App({
       })
       .catch((e) => {
         setError(e.message);
+        console.error(e.message);
       });
   }, []);
 
   useEffect(() => {
     if (!ready) return;
-    track("App Load");
+    growthbookTrackingPlugin({
+      ingestorHost: getIngestorHost(),
+      enable: isTelemetryEnabled(),
+      debug: inTelemetryDebugMode(),
+      eventFilter: (event) => {
+        // Wait for account plan to load before sending events
+        // When the plan does load, the app will re-render, so no events will be lost
+        if (event.attributes.accountPlan === "loading") return false;
+        return true;
+      },
+      dedupeKeyAttributes: ["id", "organizationId"],
+    })(growthbook);
   }, [ready]);
 
   useEffect(() => {
     // Load feature definitions JSON from GrowthBook API
-    fetch("https://cdn.growthbook.io/api/features/key_prod_cb40dfcb0eb98e44")
-      .then((res) => res.json())
-      .then((json) => {
-        growthbook.setFeatures(json.features);
-      })
-      .catch(() => {
-        console.log("Failed to fetch GrowthBook feature definitions");
-      });
-  }, [router.pathname]);
+    growthbook.init({ streaming: true }).catch(() => {
+      console.log("Failed to fetch GrowthBook feature definitions");
+    });
+  }, []);
+
+  const renderPreAuth = () => {
+    if (!ready || !progressiveAuth) {
+      return (
+        <PageHeadProvider>
+          {preAuthTopNav ? (
+            <>
+              <TopNavLite />
+              <main className="container">
+                <Component {...{ ...pageProps, envReady: ready }} />
+              </main>
+            </>
+          ) : (
+            <Component {...{ ...pageProps, envReady: ready }} />
+          )}
+        </PageHeadProvider>
+      );
+    }
+
+    return (
+      <AuthProvider exitOnNoAuth={!(preAuth || progressiveAuth)}>
+        <GrowthBookProvider growthbook={growthbook}>
+          <UserContextProvider key={orgId}>
+            <DefinitionsProvider>
+              <PageHeadProvider>
+                {preAuthTopNav || progressiveAuthTopNav ? (
+                  <>
+                    <TopNavLite />
+                    <main className={`main lite ${parts[0]}`}>
+                      <Component {...{ ...pageProps, envReady: ready }} />
+                    </main>
+                  </>
+                ) : (
+                  <Component {...{ ...pageProps, envReady: ready }} />
+                )}
+              </PageHeadProvider>
+            </DefinitionsProvider>
+          </UserContextProvider>
+        </GrowthBookProvider>
+      </AuthProvider>
+    );
+  };
 
   return (
     <>
+      <style jsx global>{`
+        html {
+          font-family: var(--default-font-family);
+          --default-font-family: ${inter.style.fontFamily};
+        }
+        body {
+          font-family: var(--default-font-family);
+        }
+        .radix-themes {
+          --default-font-family: ${inter.style.fontFamily};
+          --font-weight-medium: 600;
+        }
+      `}</style>
       <Head>
         <title>GrowthBook</title>
         <meta name="robots" content="noindex, nofollow" />
       </Head>
-      {ready ? (
-        <AuthProvider>
-          <GrowthBookProvider growthbook={growthbook}>
-            <ProtectedPage
-              organizationRequired={organizationRequired}
-              preAuth={preAuth}
-            >
-              {organizationRequired && !preAuth ? (
-                <DefinitionsProvider>
-                  <Layout />
-                  <main className={`main ${parts[0]}`}>
-                    <Component {...pageProps} />
-                  </main>
-                </DefinitionsProvider>
-              ) : (
-                <Component {...pageProps} />
-              )}
-            </ProtectedPage>
-          </GrowthBookProvider>
-        </AuthProvider>
+      {ready || noLoadingOverlay ? (
+        <AppearanceUIThemeProvider>
+          <RadixTheme>
+            <div id="portal-root" />
+            {preAuth || progressiveAuth ? (
+              renderPreAuth()
+            ) : (
+              <PageHeadProvider>
+                <AuthProvider>
+                  <GrowthBookProvider growthbook={growthbook}>
+                    <ProtectedPage organizationRequired={organizationRequired}>
+                      {organizationRequired ? (
+                        <GetStartedProvider>
+                          <DefinitionsProvider>
+                            {liteLayout ? <LayoutLite /> : <Layout />}
+                            <main className={`main ${parts[0]}`}>
+                              <GuidedGetStartedBar />
+                              <OrganizationMessagesContainer />
+                              <DemoDataSourceGlobalBannerContainer />
+                              <DefinitionsGuard>
+                                <Component
+                                  {...{ ...pageProps, envReady: ready }}
+                                />
+                              </DefinitionsGuard>
+                            </main>
+                          </DefinitionsProvider>
+                        </GetStartedProvider>
+                      ) : (
+                        <div>
+                          <TopNavLite />
+                          <main className="container">
+                            <Component {...{ ...pageProps, envReady: ready }} />
+                          </main>
+                        </div>
+                      )}
+                    </ProtectedPage>
+                  </GrowthBookProvider>
+                </AuthProvider>
+              </PageHeadProvider>
+            )}
+          </RadixTheme>
+        </AppearanceUIThemeProvider>
       ) : error ? (
-        <div className="container mt-3">
+        <div className="container">
           <div className="alert alert-danger">
             Error Initializing GrowthBook: {error}
           </div>

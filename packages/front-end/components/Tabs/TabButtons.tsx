@@ -1,10 +1,11 @@
 import clsx from "clsx";
-import { FC } from "react";
+import { ReactNode, FC } from "react";
 
 const TabButtons: FC<{
   newStyle?: boolean;
   vertical?: boolean;
   className?: string;
+  children: ReactNode;
 }> = ({ children, newStyle = true, vertical = false, className }) => {
   return (
     <div className={newStyle ? "buttontabs" : ""}>

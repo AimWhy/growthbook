@@ -2,11 +2,12 @@ import {
   ExperimentReportResultDimension,
   ExperimentReportVariation,
 } from "back-end/types/report";
-import React, { useMemo } from "react";
+import React, { useCallback, useMemo } from "react";
 import { FaFileExport } from "react-icons/fa";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import { ExperimentTableRow, getRisk } from "../../services/experiments";
 import { Parser } from "json2csv";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import { ExperimentTableRow, getRiskByVariation } from "@/services/experiments";
+import { useOrganizationMetricDefaults } from "@/hooks/useOrganizationMetricDefaults";
 
 type CsvRow = {
   date?: string;
@@ -17,8 +18,15 @@ type CsvRow = {
   users?: number;
   totalValue?: number;
   perUserValue?: number;
+  perUserValueStdDev?: number | null;
   chanceToBeatControl?: number | null;
   percentChange?: number | null;
+  percentChangePValue?: number | null;
+  percentChangePValueAdjusted?: number | null;
+  percentChangeCILower?: number | null;
+  percentChangeCIUpper?: number | null;
+  percentChangeCILowerAdjusted?: number | null;
+  percentChangeCIUpperAdjusted?: number | null;
 };
 
 export default function ResultsDownloadButton({
@@ -27,48 +35,59 @@ export default function ResultsDownloadButton({
   variations,
   trackingKey,
   dimension,
+  noIcon,
 }: {
-  results?: ExperimentReportResultDimension[];
-  metrics: string[];
-  variations: ExperimentReportVariation[];
-  trackingKey: string;
-  dimension: string;
+  results: ExperimentReportResultDimension[];
+  metrics?: string[];
+  variations?: ExperimentReportVariation[];
+  trackingKey?: string;
+  dimension?: string;
+  noIcon?: boolean;
 }) {
-  const { getMetricById, getDimensionById, ready } = useDefinitions();
+  const { getExperimentMetricById, getDimensionById, ready } = useDefinitions();
+  const { metricDefaults } = useOrganizationMetricDefaults();
 
-  const dimensionName =
-    getDimensionById(dimension)?.name ||
-    dimension?.split(":")?.[1] ||
-    dimension ||
-    null;
+  const dimensionName = dimension
+    ? getDimensionById(dimension)?.name ||
+      dimension?.split(":")?.[1] ||
+      dimension
+    : null;
 
-  const getRows = () => {
+  const getRows = useCallback(() => {
     const csvRows: CsvRow[] = [];
 
-    if (!results || !variations || !ready) return [];
+    if (!variations || !ready) return [];
 
     const resultsCopy = [...results];
 
-    if (dimension === "pre:date") {
+    if (dimension?.substring(0, 8) === "pre:date") {
       // Sort the results by date to make csv cleaner
       resultsCopy.sort((a, b) => a.name.localeCompare(b.name));
     }
 
     resultsCopy.forEach((result) => {
-      metrics.forEach((m) => {
+      metrics?.forEach((m) => {
         result.variations.forEach((variation, index) => {
-          const metric = getMetricById(m);
+          const metric = getExperimentMetricById(m);
+          if (!metric) return;
           const row: ExperimentTableRow = {
-            label: metric?.name,
+            label: metric.name,
             metric: metric,
+            metricOverrideFields: [],
             rowClass: metric?.inverse ? "inverse" : "",
             variations: result.variations.map((v) => {
               return v.metrics[m];
             }),
+            // We don't care what this is set to here, just need something
+            resultGroup: "goal",
           };
           const stats = variation.metrics[m];
-          if (!stats) return [];
-          const { relativeRisk } = getRisk(index, row);
+          if (!stats) return;
+          const { relativeRisk } = getRiskByVariation(
+            index,
+            row,
+            metricDefaults
+          );
           csvRows.push({
             ...(dimensionName && { [dimensionName]: result.name }),
             metric: metric?.name,
@@ -77,22 +96,37 @@ export default function ResultsDownloadButton({
             users: stats.users,
             totalValue: stats.value,
             perUserValue: stats.cr,
-            chanceToBeatControl: stats.chanceToWin || null,
+            perUserValueStdDev: stats.stats?.stddev || null,
+            chanceToBeatControl: stats.chanceToWin ?? null,
             percentChange: stats.expected || null,
+            percentChangePValue: stats.pValue ?? null,
+            percentChangePValueAdjusted: stats.pValueAdjusted ?? null,
+            percentChangeCILower: stats.ci?.[0] || null,
+            percentChangeCIUpper: stats.ci?.[1] || null,
+            percentChangeCILowerAdjusted: stats.ciAdjusted?.[0] ?? null,
+            percentChangeCIUpperAdjusted: stats.ciAdjusted?.[1] ?? null,
           });
         });
       });
     });
     return csvRows;
-  };
+  }, [
+    dimension,
+    dimensionName,
+    getExperimentMetricById,
+    metricDefaults,
+    metrics,
+    ready,
+    results,
+    variations,
+  ]);
 
   const href = useMemo(() => {
     try {
       const rows = getRows();
-      if (!rows) return "";
+      if (!rows || rows?.length < 1) return "";
 
       const json2csvParser = new Parser();
-
       const csv = json2csvParser.parse(rows);
 
       const blob = new Blob([csv], { type: "text/csv" });
@@ -101,7 +135,7 @@ export default function ResultsDownloadButton({
       console.error(e);
       return "";
     }
-  }, [results, ready, variations, dimension]);
+  }, [getRows]);
 
   if (!href) return null;
 
@@ -116,7 +150,12 @@ export default function ResultsDownloadButton({
           : "results.csv"
       }
     >
-      <FaFileExport className="mr-2" /> Export CSV
+      {!noIcon ? (
+        <>
+          <FaFileExport className="mr-2" />{" "}
+        </>
+      ) : null}
+      Export CSV
     </a>
   );
 }

@@ -1,13 +1,13 @@
 import clsx from "clsx";
-import styles from "./ExperimentSplitVisual.module.scss";
 import React, { CSSProperties } from "react";
 import { ExperimentValue, FeatureValueType } from "back-end/types/feature";
-import Tooltip from "../Tooltip";
 import { FaExclamationTriangle } from "react-icons/fa";
 import {
   getVariationColor,
   getVariationDefaultName,
-} from "../../services/features";
+} from "@/services/features";
+import Tooltip from "@/components/Tooltip/Tooltip";
+import styles from "./ExperimentSplitVisual.module.scss";
 
 export interface Props {
   label?: string;
@@ -84,7 +84,7 @@ export default function ExperimentSplitVisual({
               const additionalStyles: CSSProperties = {
                 width: percentVal + "%",
                 height: 30,
-                backgroundColor: getVariationColor(i),
+                backgroundColor: getVariationColor(i, true),
               };
               if (!stackLeft) {
                 additionalStyles.position = "absolute";
@@ -104,7 +104,7 @@ export default function ExperimentSplitVisual({
                   style={additionalStyles}
                 >
                   <Tooltip
-                    text={variationLabel}
+                    body={variationLabel}
                     style={{ width: "100%", height: "100%" }}
                   >
                     <></>
@@ -135,7 +135,7 @@ export default function ExperimentSplitVisual({
                 }}
               >
                 <Tooltip
-                  text={`Not included: ${parseFloat(
+                  body={`Not included: ${parseFloat(
                     ((1 - coverageVal) * 100).toPrecision(5)
                   )}% - users will skip this rule`}
                   style={{ width: "100%", height: "100%" }}

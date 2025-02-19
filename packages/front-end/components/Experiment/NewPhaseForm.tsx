@@ -4,21 +4,28 @@ import {
   ExperimentPhaseStringDates,
 } from "back-end/types/experiment";
 import { useForm } from "react-hook-form";
-import Modal from "../Modal";
-import { useAuth } from "../../services/auth";
-import { useWatching } from "../../services/WatchProvider";
-import { getEvenSplit } from "../../services/utils";
-import GroupsInput from "../GroupsInput";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import Field from "../Forms/Field";
-import { useFeature } from "@growthbook/growthbook-react";
-import VariationsInput from "../Features/VariationsInput";
+import { validateAndFixCondition } from "shared/util";
+import { getEqualWeights } from "shared/experiments";
+import { datetime } from "shared/dates";
+import { useAuth } from "@/services/auth";
+import { useWatching } from "@/services/WatchProvider";
+import { useIncrementer } from "@/hooks/useIncrementer";
+import Modal from "@/components/Modal";
+import Field from "@/components/Forms/Field";
+import FeatureVariationsInput from "@/components/Features/FeatureVariationsInput";
+import ConditionInput from "@/components/Features/ConditionInput";
+import NamespaceSelector from "@/components/Features/NamespaceSelector";
+import SavedGroupTargetingField, {
+  validateSavedGroupTargeting,
+} from "@/components/Features/SavedGroupTargetingField";
+import DatePicker from "@/components/DatePicker";
 
 const NewPhaseForm: FC<{
   experiment: ExperimentInterfaceStringDates;
   mutate: () => void;
   close: () => void;
-}> = ({ experiment, close, mutate }) => {
+  source?: string;
+}> = ({ experiment, close, mutate, source }) => {
   const { refreshWatching } = useWatching();
 
   const firstPhase = !experiment.phases.length;
@@ -26,26 +33,29 @@ const NewPhaseForm: FC<{
   const prevPhase: Partial<ExperimentPhaseStringDates> =
     experiment.phases[experiment.phases.length - 1] || {};
 
-  const form = useForm({
+  const form = useForm<ExperimentPhaseStringDates>({
     defaultValues: {
-      phase: prevPhase.phase || "main",
+      name: prevPhase.name || "Main",
       coverage: prevPhase.coverage || 1,
       variationWeights:
         prevPhase.variationWeights ||
-        getEvenSplit(experiment.variations.length),
+        getEqualWeights(experiment.variations.length),
       reason: "",
       dateStarted: new Date().toISOString().substr(0, 16),
-      groups: prevPhase.groups || [],
+      condition: prevPhase.condition || "",
+      savedGroups: prevPhase.savedGroups || [],
+      seed: prevPhase.seed || "",
+      namespace: {
+        enabled: prevPhase.namespace?.enabled || false,
+        name: prevPhase.namespace?.name || "",
+        range: prevPhase.namespace?.range || [0, 0.5],
+      },
     },
   });
-
-  const { refreshGroups } = useDefinitions();
 
   const { apiCall } = useAuth();
 
   const variationWeights = form.watch("variationWeights");
-
-  const showGroups = useFeature("show-experiment-groups").on;
 
   // Make sure variation weights add up to 1 (allow for a little bit of rounding error)
   const totalWeights = variationWeights.reduce(
@@ -54,27 +64,36 @@ const NewPhaseForm: FC<{
   );
   const isValid = totalWeights > 0.99 && totalWeights < 1.01;
 
+  const [conditionKey, forceConditionRender] = useIncrementer();
+
   const submit = form.handleSubmit(async (value) => {
     if (!isValid) throw new Error("Variation weights must sum to 1");
 
-    const body = {
-      ...value,
-    };
+    validateSavedGroupTargeting(value.savedGroups);
+
+    validateAndFixCondition(value.condition, (condition) => {
+      form.setValue("condition", condition);
+      forceConditionRender();
+    });
 
     await apiCall<{ status: number; message?: string }>(
       `/experiment/${experiment.id}/phase`,
       {
         method: "POST",
-        body: JSON.stringify(body),
+        body: JSON.stringify(value),
       }
     );
-    await refreshGroups(value.groups);
     mutate();
     refreshWatching();
   });
 
+  const hasLinkedChanges =
+    !!experiment.linkedFeatures?.length || experiment.hasVisualChangesets;
+
   return (
     <Modal
+      trackingEventModalType="new-phase-form"
+      trackingEventModalSource={source}
       header={firstPhase ? "Start Experiment" : "New Experiment Phase"}
       close={close}
       open={true}
@@ -83,54 +102,56 @@ const NewPhaseForm: FC<{
       closeCta="Cancel"
       size="lg"
     >
-      <div className="row">
-        {!firstPhase && (
-          <Field
-            containerClassName="col-12"
-            label="Reason for Starting New Phase"
-            textarea
-            {...form.register("reason")}
-            placeholder="(optional)"
-          />
-        )}
-        <Field
-          containerClassName="col-12"
-          label="Start Time (UTC)"
-          type="datetime-local"
-          {...form.register("dateStarted")}
-        />
-      </div>
-      <div className="row">
-        <Field
-          label="Type of Phase"
-          containerClassName="col-lg"
-          {...form.register("phase")}
-          options={[
-            "ramp",
-            { value: "main", display: "main (default)" },
-            "holdout",
-          ]}
-        />
-      </div>
-      {(experiment.implementation === "visual" || showGroups) && (
-        <div className="row">
-          <div className="col">
-            <label>User Groups (optional)</label>
-            <GroupsInput
-              value={form.watch("groups")}
-              onChange={(groups) => {
-                form.setValue("groups", groups);
-              }}
-            />
-            <small className="form-text text-muted">
-              Use this to limit your experiment to specific groups of users
-              (e.g. &quot;internal&quot;, &quot;beta-testers&quot;,
-              &quot;qa&quot;).
-            </small>
-          </div>
+      {hasLinkedChanges && experiment.status !== "stopped" && (
+        <div className="alert alert-warning">
+          <strong>Warning:</strong> Starting a new phase will immediately affect
+          all linked Feature Flags and Visual Changes.
         </div>
       )}
-      <VariationsInput
+      <div className="row">
+        <Field
+          label="Name"
+          containerClassName="col-lg"
+          required
+          {...form.register("name")}
+        />
+      </div>
+      {!firstPhase && (
+        <Field
+          label="Reason for Starting New Phase"
+          textarea
+          {...form.register("reason")}
+          placeholder="(optional)"
+        />
+      )}
+      {!hasLinkedChanges && (
+        <DatePicker
+          label="Start Time (UTC)"
+          date={form.watch("dateStarted")}
+          setDate={(v) => {
+            form.setValue("dateStarted", v ? datetime(v) : "");
+          }}
+        />
+      )}
+
+      {hasLinkedChanges && (
+        <SavedGroupTargetingField
+          value={form.watch("savedGroups") || []}
+          setValue={(savedGroups) => form.setValue("savedGroups", savedGroups)}
+          project={experiment.project || ""}
+        />
+      )}
+
+      {hasLinkedChanges && (
+        <ConditionInput
+          defaultValue={form.watch("condition")}
+          onChange={(condition) => form.setValue("condition", condition)}
+          key={conditionKey}
+          project={experiment.project || ""}
+        />
+      )}
+
+      <FeatureVariationsInput
         valueType={"string"}
         coverage={form.watch("coverage")}
         setCoverage={(coverage) => form.setValue("coverage", coverage)}
@@ -144,12 +165,20 @@ const NewPhaseForm: FC<{
               value: v.key || i + "",
               name: v.name,
               weight: form.watch(`variationWeights.${i}`),
+              id: v.id,
             };
           }) || []
         }
-        coverageTooltip="This is just for documentation purposes and has no effect on the analysis."
         showPreview={false}
+        hideCoverage={!hasLinkedChanges}
       />
+      {hasLinkedChanges && (
+        <NamespaceSelector
+          form={form}
+          featureId={experiment.trackingKey}
+          trackingKey={experiment.trackingKey}
+        />
+      )}
     </Modal>
   );
 };

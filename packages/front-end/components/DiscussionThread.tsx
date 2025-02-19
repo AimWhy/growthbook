@@ -4,21 +4,22 @@ import {
   DiscussionInterface,
   Comment,
 } from "back-end/types/discussion";
-import { date } from "../services/dates";
-import { useAuth } from "../services/auth";
-import useApi from "../hooks/useApi";
-import LoadingSpinner from "./LoadingSpinner";
-import Avatar from "./Avatar";
 import { FaPencilAlt } from "react-icons/fa";
-import DeleteButton from "./DeleteButton";
+import { date } from "shared/dates";
+import { useAuth } from "@/services/auth";
+import useApi from "@/hooks/useApi";
+import { useUser } from "@/services/UserContext";
+import usePermissionsUtil from "@/hooks/usePermissionsUtils";
+import LoadingSpinner from "./LoadingSpinner";
+import Avatar from "./Avatar/Avatar";
+import DeleteButton from "./DeleteButton/DeleteButton";
 import CommentForm from "./CommentForm";
 import Markdown from "./Markdown/Markdown";
-import useUser from "../hooks/useUser";
-import usePermissions from "../hooks/usePermissions";
 
 const DiscussionThread: FC<{
   type: DiscussionParentType;
   id: string;
+  projects: string[];
   allowNewComments?: boolean;
   showTitle?: boolean;
   title?: string;
@@ -28,14 +29,15 @@ const DiscussionThread: FC<{
   allowNewComments = true,
   showTitle = false,
   title = "Add comment",
+  projects,
 }) => {
   const { apiCall } = useAuth();
   const { userId, users } = useUser();
-  const [edit, setEdit] = useState(null);
+  const [edit, setEdit] = useState<number | null>(null);
 
-  const permissions = usePermissions();
+  const permissions = usePermissionsUtil();
 
-  if (!permissions.addComments) {
+  if (!permissions.canAddComment(projects)) {
     allowNewComments = false;
   }
 
@@ -63,7 +65,7 @@ const DiscussionThread: FC<{
 
             return (
               <li className="media mb-3" key={i}>
-                <Avatar email={email} className="mr-2" />
+                <Avatar email={email} className="mr-2" name={name} />
                 <div className="media-body">
                   {edit === i ? (
                     <CommentForm
@@ -137,7 +139,7 @@ const DiscussionThread: FC<{
         </p>
       )}
       {allowNewComments && (
-        <>
+        <div className="d-print-none">
           {!showTitle && <hr />}
           {showTitle && <h4 className="add-comment-title">{title}</h4>}
           <CommentForm
@@ -147,7 +149,7 @@ const DiscussionThread: FC<{
             id={id}
             type={type}
           />
-        </>
+        </div>
       )}
     </div>
   );

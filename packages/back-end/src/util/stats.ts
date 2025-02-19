@@ -1,4 +1,5 @@
-import { jStat } from "jstat";
+import chisquare from "@stdlib/stats/base/dists/chisquare";
+import { returnZeroIfNotFinite } from "shared/util";
 
 export function checkSrm(users: number[], weights: number[]) {
   // Skip variations with weight=0 or users=0
@@ -23,5 +24,13 @@ export function checkSrm(users: number[], weights: number[]) {
     e = (e / totalWeight) * totalUsers;
     x += Math.pow(o - e, 2) / e;
   });
-  return 1 - jStat.chisquare.cdf(x, data.length - 1);
+  return 1 - chisquare.cdf(x, data.length - 1);
+}
+
+export function sumSquaresFromStats(
+  sum: number,
+  variance: number,
+  n: number
+): number {
+  return returnZeroIfNotFinite(variance * (n - 1) + Math.pow(sum, 2) / n);
 }

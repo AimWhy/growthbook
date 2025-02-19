@@ -1,18 +1,23 @@
-import React, { FC, Fragment, useState } from "react";
+import React, { FC, Fragment, ReactElement, useState } from "react";
 import { FaPencilAlt } from "react-icons/fa";
-import LoadingOverlay from "../../components/LoadingOverlay";
 import { SegmentInterface } from "back-end/types/segment";
-import { ago } from "../../services/dates";
-import Button from "../../components/Button";
-import SegmentForm from "../../components/Segments/SegmentForm";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import DeleteButton from "../../components/DeleteButton";
 import { IdeaInterface } from "back-end/types/idea";
 import { MetricInterface } from "back-end/types/metric";
 import Link from "next/link";
-import { useAuth } from "../../services/auth";
-import { GBAddCircle } from "../../components/Icons";
-import usePermissions from "../../hooks/usePermissions";
+import clsx from "clsx";
+import { ago } from "shared/dates";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import Button from "@/components/Radix/Button";
+import SegmentForm from "@/components/Segments/SegmentForm";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import DeleteButton from "@/components/DeleteButton/DeleteButton";
+import { useAuth } from "@/services/auth";
+import { hasFileConfig, storeSegmentsInMongo } from "@/services/env";
+import { DocLink } from "@/components/DocLink";
+import Tooltip from "@/components/Tooltip/Tooltip";
+import usePermissionsUtil from "@/hooks/usePermissionsUtils";
+import MoreMenu from "@/components/Dropdown/MoreMenu";
+import ProjectBadges from "@/components/ProjectBadges";
 
 const SegmentPage: FC = () => {
   const {
@@ -22,9 +27,19 @@ const SegmentPage: FC = () => {
     datasources,
     error: segmentsError,
     mutateDefinitions: mutate,
+    project,
   } = useDefinitions();
 
-  const permissions = usePermissions();
+  const permissionsUtil = usePermissionsUtil();
+
+  const hasCreatePermission = permissionsUtil.canCreateSegment({
+    projects: [project],
+  });
+  let canStoreSegmentsInMongo = false;
+
+  if (!hasFileConfig() || (hasFileConfig() && storeSegmentsInMongo())) {
+    canStoreSegmentsInMongo = true;
+  }
 
   const [
     segmentForm,
@@ -38,7 +53,7 @@ const SegmentPage: FC = () => {
   }
 
   const getSegmentUsage = (s: SegmentInterface) => {
-    return async () => {
+    return async (): Promise<ReactElement | null> => {
       try {
         const res = await apiCall<{
           status: number;
@@ -50,14 +65,14 @@ const SegmentPage: FC = () => {
           method: "GET",
         });
 
-        const metricLinks = [];
-        const ideaLinks = [];
-        const expLinks = [];
+        const metricLinks: (ReactElement | string)[] = [];
+        const ideaLinks: (ReactElement | string)[] = [];
+        const expLinks: (ReactElement | string)[] = [];
         let subtitleText = "This segment is not referenced anywhere else.";
         if (res.total) {
           subtitleText = "This segment is referenced in ";
-          const refs = [];
-          if (res.metrics.length) {
+          const refs: (ReactElement | string)[] = [];
+          if (res.metrics && res.metrics.length) {
             refs.push(
               res.metrics.length === 1
                 ? "1 metric"
@@ -65,36 +80,28 @@ const SegmentPage: FC = () => {
             );
             res.metrics.forEach((m) => {
               metricLinks.push(
-                <Link href={`/metric/${m.id}`}>
-                  <a className="">{m.name}</a>
+                <Link href={`/metric/${m.id}`} className="">
+                  {m.name}
                 </Link>
               );
             });
           }
-          if (res.ideas.length) {
+          if (res.ideas && res.ideas.length) {
             refs.push(
               res.ideas.length === 1 ? "1 idea" : res.ideas.length + " ideas"
             );
             res.ideas.forEach((i) => {
-              ideaLinks.push(
-                <Link href={`/idea/${i.id}`}>
-                  <a>{i.text}</a>
-                </Link>
-              );
+              ideaLinks.push(<Link href={`/idea/${i.id}`}>{i.text}</Link>);
             });
           }
-          if (res.experiments.length) {
+          if (res.experiments && res.experiments.length) {
             refs.push(
               res.experiments.length === 1
                 ? "1 experiment"
                 : res.experiments.length + " Experiments"
             );
             res.experiments.forEach((e) => {
-              expLinks.push(
-                <Link href={`/experiment/${e.id}`}>
-                  <a>{e.name}</a>
-                </Link>
-              );
+              expLinks.push(<Link href={`/experiment/${e.id}`}>{e.name}</Link>);
             });
           }
           subtitleText += refs.join(" and ");
@@ -168,6 +175,7 @@ const SegmentPage: FC = () => {
           </div>
         );
       }
+      return null;
     };
   };
 
@@ -179,15 +187,15 @@ const SegmentPage: FC = () => {
     return (
       <div className="p-3 container-fluid pagecontents">
         <div className="row mb-3">
-          <div className="col">
-            <h3>Segments</h3>
+          <div className="col d-flex">
+            <h1>Segments</h1>
           </div>
         </div>
         <div className="alert alert-info">
           Segments are only available if you connect GrowthBook to a compatible
           data source (Snowflake, Redshift, BigQuery, ClickHouse, Athena,
-          Postgres, MySQL, Presto, or Mixpanel). Support for other data sources
-          like Google Analytics is coming soon.
+          Postgres, MySQL, MS SQL, Presto, Databricks, or Mixpanel). Support for
+          other data sources like Google Analytics is coming soon.
         </div>
       </div>
     );
@@ -199,22 +207,18 @@ const SegmentPage: FC = () => {
         <SegmentForm close={() => setSegmentForm(null)} current={segmentForm} />
       )}
       <div className="row mb-3">
-        <div className="col-auto">
-          <h3>Segments</h3>
+        <div className="col-auto d-flex">
+          <h1>Segments</h1>
         </div>
         <div style={{ flex: 1 }}></div>
-        {permissions.createSegments && (
+        {hasCreatePermission && canStoreSegmentsInMongo && (
           <div className="col-auto">
             <Button
-              color="primary"
-              onClick={async () => {
+              onClick={() => {
                 setSegmentForm({});
               }}
             >
-              <span className="h4 pr-2 m-0 d-inline-block align-top">
-                <GBAddCircle />
-              </span>{" "}
-              New Segment
+              Add Segment
             </Button>
           </div>
         )}
@@ -232,69 +236,107 @@ const SegmentPage: FC = () => {
               &quot;annual subscribers&quot; or &quot;left-handed people from
               France.&quot;
             </p>
-            <table className="table appbox gbtable table-hover">
+            <table
+              className={clsx("table appbox gbtable", {
+                "table-hover": !hasFileConfig(),
+              })}
+            >
               <thead>
                 <tr>
                   <th>Name</th>
                   <th>Owner</th>
+                  <th>Projects</th>
                   <th className="d-none d-sm-table-cell">Data Source</th>
                   <th className="d-none d-md-table-cell">Identifier Type</th>
-                  <th className="d-none d-lg-table-cell">Definition</th>
-                  <th>Date Updated</th>
-                  {permissions.createSegments && <th></th>}
+                  {canStoreSegmentsInMongo ? <th>Date Updated</th> : null}
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
                 {segments.map((s) => {
                   const datasource = getDatasourceById(s.datasource);
+                  const userIdType = datasource?.properties?.userIds
+                    ? s.userIdType || "user_id"
+                    : "";
                   return (
                     <tr key={s.id}>
-                      <td>{s.name}</td>
+                      <td>
+                        <>
+                          {s.name}{" "}
+                          {s.description ? (
+                            <Tooltip body={s.description} />
+                          ) : null}
+                        </>
+                      </td>
                       <td>{s.owner}</td>
+                      <td className="col-2">
+                        {s && (s.projects || []).length > 0 ? (
+                          <ProjectBadges
+                            resourceType="segment"
+                            projectIds={s.projects}
+                          />
+                        ) : (
+                          <ProjectBadges resourceType="segment" />
+                        )}
+                      </td>
                       <td className="d-none d-sm-table-cell">
-                        {datasource?.name}
+                        {datasource && (
+                          <>
+                            <Link href={`/datasources/${datasource.id}`}>
+                              {datasource.name}
+                            </Link>{" "}
+                            {datasource.description ? (
+                              <Tooltip body={datasource.description} />
+                            ) : null}
+                          </>
+                        )}
                       </td>
                       <td className="d-none d-md-table-cell">
-                        {datasource?.properties?.userIds
-                          ? s.userIdType || "user_id"
-                          : ""}
+                        <span
+                          className="badge badge-secondary mr-1"
+                          key={`${s.id}-${userIdType}`}
+                        >
+                          {userIdType}
+                        </span>
                       </td>
-                      <td className="d-none d-lg-table-cell">
-                        <code>{s.sql}</code>
+                      {canStoreSegmentsInMongo ? (
+                        <td>{ago(s.dateUpdated)}</td>
+                      ) : null}
+                      <td>
+                        <MoreMenu>
+                          {permissionsUtil.canUpdateSegment(s, {}) &&
+                          canStoreSegmentsInMongo ? (
+                            <button
+                              className="dropdown-item"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                setSegmentForm(s);
+                              }}
+                            >
+                              <FaPencilAlt /> Edit
+                            </button>
+                          ) : null}
+                          {permissionsUtil.canDeleteSegment(s) &&
+                          canStoreSegmentsInMongo ? (
+                            <DeleteButton
+                              className="dropdown-item"
+                              displayName={s.name}
+                              text="Delete"
+                              getConfirmationContent={getSegmentUsage(s)}
+                              onClick={async () => {
+                                await apiCall<{
+                                  status: number;
+                                  message?: string;
+                                }>(`/segments/${s.id}`, {
+                                  method: "DELETE",
+                                  body: JSON.stringify({ id: s.id }),
+                                });
+                                await mutate({});
+                              }}
+                            />
+                          ) : null}
+                        </MoreMenu>
                       </td>
-                      <td>{ago(s.dateUpdated)}</td>
-                      {permissions.createSegments && (
-                        <td>
-                          <a
-                            href="#"
-                            className="tr-hover text-primary mr-3"
-                            title="Edit this segment"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              setSegmentForm(s);
-                            }}
-                          >
-                            <FaPencilAlt />
-                          </a>
-                          <DeleteButton
-                            link={true}
-                            className={"tr-hover text-primary"}
-                            displayName={s.name}
-                            title="Delete this segment"
-                            getConfirmationContent={getSegmentUsage(s)}
-                            onClick={async () => {
-                              await apiCall<{
-                                status: number;
-                                message?: string;
-                              }>(`/segments/${s.id}`, {
-                                method: "DELETE",
-                                body: JSON.stringify({ id: s.id }),
-                              });
-                              await mutate({});
-                            }}
-                          />
-                        </td>
-                      )}
                     </tr>
                   );
                 })}
@@ -303,11 +345,30 @@ const SegmentPage: FC = () => {
           </div>
         </div>
       )}
-      {segments.length === 0 && (
+      {segments.length === 0 && !hasFileConfig() && (
         <div className="alert alert-info">
           You don&apos;t have any segments defined yet.{" "}
-          {permissions.createSegments &&
+          {hasCreatePermission &&
             "Click the button above to create your first one."}
+        </div>
+      )}
+      {segments.length === 0 && hasFileConfig() && storeSegmentsInMongo() && (
+        <div className="alert alert-info">
+          You don&apos;t have any segments defined yet. You can add them to your{" "}
+          <code>config.yml</code> file and remove the{" "}
+          <code>STORE_SEGMENTS_IN_MONGO</code> environment variable
+          {hasCreatePermission &&
+            " or click the button above to create your first one"}
+          . <DocLink docSection="config_yml">View Documentation</DocLink>
+        </div>
+      )}
+      {segments.length === 0 && hasFileConfig() && !storeSegmentsInMongo() && (
+        <div className="alert alert-info">
+          It looks like you have a <code>config.yml</code> file. Segments
+          defined there will show up on this page. If you would like to store
+          and access segments in MongoDB instead, please add the{" "}
+          <code>STORE_SEGMENTS_IN_MONGO</code> environment variable.{" "}
+          <DocLink docSection="config_yml">View Documentation</DocLink>
         </div>
       )}
     </div>

@@ -1,18 +1,20 @@
 import React, { FC, useState } from "react";
 import { FaPencilAlt } from "react-icons/fa";
-import LoadingOverlay from "../../components/LoadingOverlay";
-import { ago } from "../../services/dates";
-import Button from "../../components/Button";
 import { DimensionInterface } from "back-end/types/dimension";
-import DimensionForm from "../../components/Dimensions/DimensionForm";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import { hasFileConfig } from "../../services/env";
 import clsx from "clsx";
 import Link from "next/link";
-import DeleteButton from "../../components/DeleteButton";
-import { useAuth } from "../../services/auth";
-import { GBAddCircle } from "../../components/Icons";
-import usePermissions from "../../hooks/usePermissions";
+import { ago } from "shared/dates";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import Button from "@/components/Radix/Button";
+import DimensionForm from "@/components/Dimensions/DimensionForm";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import { hasFileConfig } from "@/services/env";
+import DeleteButton from "@/components/DeleteButton/DeleteButton";
+import { useAuth } from "@/services/auth";
+import { DocLink } from "@/components/DocLink";
+import Code, { Language } from "@/components/SyntaxHighlighting/Code";
+import Tooltip from "@/components/Tooltip/Tooltip";
+import usePermissionsUtil from "@/hooks/usePermissionsUtils";
 
 const DimensionsPage: FC = () => {
   const {
@@ -24,7 +26,10 @@ const DimensionsPage: FC = () => {
     mutateDefinitions,
   } = useDefinitions();
 
-  const permissions = usePermissions();
+  const permissionsUtil = usePermissionsUtil();
+  const canCreateDimension = permissionsUtil.canCreateDimension();
+  const canEditDimension = permissionsUtil.canUpdateDimension();
+  const canDeleteDimension = permissionsUtil.canDeleteDimension();
 
   const [
     dimensionForm,
@@ -45,15 +50,21 @@ const DimensionsPage: FC = () => {
     return (
       <div className="p-3 container-fluid pagecontents">
         <div className="row mb-3">
-          <div className="col">
-            <h3>User Dimensions</h3>
+          <div className="col d-flex">
+            <h1>User Dimensions</h1>
+            <DocLink
+              docSection="dimensions"
+              className="align-self-center ml-2 pb-1"
+            >
+              View Documentation
+            </DocLink>
           </div>
         </div>
         <div className="alert alert-info">
           Dimensions are only available if you connect GrowthBook to a
           compatible data source (Snowflake, Redshift, BigQuery, ClickHouse,
-          Athena, Postgres, MySQL, Presto, or Mixpanel). Support for other data
-          sources like Google Analytics is coming soon.
+          Athena, Postgres, MySQL, MS SQL, Presto, Databricks, or Mixpanel).
+          Support for other data sources like Google Analytics is coming soon.
         </div>
       </div>
     );
@@ -76,22 +87,24 @@ const DimensionsPage: FC = () => {
         />
       )}
       <div className="row mb-3">
-        <div className="col-auto">
-          <h3>User Dimensions</h3>
+        <div className="col-auto d-flex">
+          <h1>User Dimensions</h1>
+          <DocLink
+            docSection="dimensions"
+            className="align-self-center ml-2 pb-1"
+          >
+            View Documentation
+          </DocLink>
         </div>
         <div style={{ flex: 1 }}></div>
-        {!hasFileConfig() && permissions.createDimensions && (
+        {!hasFileConfig() && canCreateDimension && (
           <div className="col-auto">
             <Button
-              color="primary"
               onClick={async () => {
                 setDimensionForm({});
               }}
             >
-              <span className="h4 pr-2 m-0 d-inline-block align-top">
-                <GBAddCircle />
-              </span>{" "}
-              New User Dimension
+              Add User Dimension
             </Button>
           </div>
         )}
@@ -117,61 +130,84 @@ const DimensionsPage: FC = () => {
                   <th className="d-none d-md-table-cell">Identifier Type</th>
                   <th className="d-none d-lg-table-cell">Definition</th>
                   {!hasFileConfig() && <th>Date Updated</th>}
-                  {!hasFileConfig() && permissions.createDimensions && (
-                    <th></th>
-                  )}
+                  {!hasFileConfig() && <th></th>}
                 </tr>
               </thead>
               <tbody>
                 {dimensions.map((s) => {
                   const datasource = getDatasourceById(s.datasource);
+                  const language: Language =
+                    datasource?.properties?.queryLanguage || "sql";
                   return (
                     <tr key={s.id}>
-                      <td>{s.name}</td>
+                      <td>
+                        {" "}
+                        <>
+                          {s.name}{" "}
+                          {s.description ? (
+                            <Tooltip body={s.description} />
+                          ) : null}
+                        </>
+                      </td>
                       <td>{s.owner}</td>
                       <td className="d-none d-sm-table-cell">
-                        {datasource?.name}
+                        {datasource && (
+                          <>
+                            <Link href={`/datasources/${datasource.id}`}>
+                              {datasource.name}
+                            </Link>{" "}
+                            {datasource.description ? (
+                              <Tooltip body={datasource.description} />
+                            ) : null}
+                          </>
+                        )}
                       </td>
                       <td className="d-none d-md-table-cell">
                         {datasource?.properties?.userIds
                           ? s.userIdType || "user_id"
                           : ""}
                       </td>
-                      <td className="d-none d-lg-table-cell">
-                        {datasource?.properties?.events ? (
-                          <div>
-                            Event property: <code>{s.sql}</code>
-                          </div>
-                        ) : (
-                          <code>{s.sql}</code>
-                        )}
+                      <td
+                        className="d-none d-lg-table-cell"
+                        style={{ maxWidth: "30em" }}
+                      >
+                        <Code
+                          language={language}
+                          code={s.sql}
+                          expandable={true}
+                        />
                       </td>
+                      {/* @ts-expect-error TS(2345) If you come across this, please fix it!: Argument of type 'Date | null' is not assignable t... Remove this comment to see the full error message */}
                       {!hasFileConfig() && <td>{ago(s.dateUpdated)}</td>}
-                      {!hasFileConfig() && permissions.createDimensions && (
+                      {!hasFileConfig() && (
                         <td>
-                          <a
-                            href="#"
-                            className="tr-hover text-primary mr-3"
-                            title="Edit this dimension"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              setDimensionForm(s);
-                            }}
-                          >
-                            <FaPencilAlt />
-                          </a>
-                          <DeleteButton
-                            link={true}
-                            className={"tr-hover text-primary"}
-                            displayName={s.name}
-                            title="Delete this dimension"
-                            onClick={async () => {
-                              await apiCall(`/dimensions/${s.id}`, {
-                                method: "DELETE",
-                              });
-                              await mutateDefinitions({});
-                            }}
-                          />
+                          {canEditDimension ? (
+                            <a
+                              href="#"
+                              className="tr-hover text-primary mr-3"
+                              title="Edit this dimension"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                setDimensionForm(s);
+                              }}
+                            >
+                              <FaPencilAlt />
+                            </a>
+                          ) : null}
+                          {canDeleteDimension ? (
+                            <DeleteButton
+                              link={true}
+                              className={"tr-hover text-primary"}
+                              displayName={s.name}
+                              title="Delete this dimension"
+                              onClick={async () => {
+                                await apiCall(`/dimensions/${s.id}`, {
+                                  method: "DELETE",
+                                });
+                                await mutateDefinitions({});
+                              }}
+                            />
+                          ) : null}
                         </td>
                       )}
                     </tr>
@@ -185,7 +221,7 @@ const DimensionsPage: FC = () => {
       {!error && dimensions.length === 0 && !hasFileConfig() && (
         <div className="alert alert-info">
           You don&apos;t have any user dimensions defined yet.{" "}
-          {permissions.createDimensions &&
+          {canCreateDimension &&
             "Click the button above to create your first one."}
         </div>
       )}
@@ -193,9 +229,7 @@ const DimensionsPage: FC = () => {
         <div className="alert alert-info">
           It looks like you have a <code>config.yml</code> file. Dimensions
           defined there will show up on this page.{" "}
-          <a href="https://docs.growthbook.io/self-host/config#configyml">
-            View Documentation
-          </a>
+          <DocLink docSection="config_yml">View Documentation</DocLink>
         </div>
       )}
 
@@ -208,11 +242,9 @@ const DimensionsPage: FC = () => {
           settings.
         </p>
 
-        {permissions.editDatasourceSettings && (
-          <Link href="/datasources">
-            <a className="btn btn-outline-primary">View Data Sources</a>
-          </Link>
-        )}
+        <Link href="/datasources" className="btn btn-outline-primary">
+          View Data Sources
+        </Link>
       </div>
     </div>
   );

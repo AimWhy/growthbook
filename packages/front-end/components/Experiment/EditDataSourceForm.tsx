@@ -1,12 +1,12 @@
 import { FC } from "react";
 import { useForm } from "react-hook-form";
-import { useAuth } from "../../services/auth";
 import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
-import Modal from "../Modal";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import Field from "../Forms/Field";
-import SelectField from "../Forms/SelectField";
-import { getExposureQuery } from "../../services/datasources";
+import { useAuth } from "@/services/auth";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import { getExposureQuery } from "@/services/datasources";
+import Modal from "@/components/Modal";
+import Field from "@/components/Forms/Field";
+import SelectField from "@/components/Forms/SelectField";
 
 const EditDataSourceForm: FC<{
   experiment: ExperimentInterfaceStringDates;
@@ -35,6 +35,7 @@ const EditDataSourceForm: FC<{
 
   return (
     <Modal
+      trackingEventModalType=""
       header={"Edit Data Source Settings"}
       open={true}
       close={cancel}
@@ -52,7 +53,7 @@ const EditDataSourceForm: FC<{
         value={form.watch("datasource")}
         onChange={(v) => form.setValue("datasource", v)}
         disabled={experiment.status !== "draft"}
-        initialOption="Manual"
+        placeholder="Select..."
         name="datasource"
         autoFocus={true}
         options={datasources.map((d) => ({ value: d.id, label: d.name }))}

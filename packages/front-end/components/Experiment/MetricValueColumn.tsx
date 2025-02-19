@@ -1,54 +1,130 @@
 import { SnapshotMetric } from "back-end/types/experiment-snapshot";
-import { MetricInterface } from "back-end/types/metric";
-import { formatConversionRate } from "../../services/metrics";
+import {
+  CSSProperties,
+  DetailedHTMLProps,
+  ReactElement,
+  TdHTMLAttributes,
+} from "react";
+import {
+  ExperimentMetricInterface,
+  isFactMetric,
+  isRatioMetric,
+  quantileMetricType,
+} from "shared/experiments";
+import { FactTableInterface } from "back-end/types/fact-table";
+import {
+  getColumnRefFormatter,
+  getExperimentMetricFormatter,
+  getMetricFormatter,
+} from "@/services/metrics";
 
-const numberFormatter = new Intl.NumberFormat();
+const numberFormatter = Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+interface Props
+  extends DetailedHTMLProps<
+    TdHTMLAttributes<HTMLTableCellElement>,
+    HTMLTableCellElement
+  > {
+  metric: ExperimentMetricInterface;
+  stats: SnapshotMetric;
+  users: number;
+  className?: string;
+  style?: CSSProperties;
+  rowSpan?: number;
+  showRatio?: boolean;
+  noDataMessage?: ReactElement | string;
+  displayCurrency: string;
+  getExperimentMetricById: (id: string) => null | ExperimentMetricInterface;
+  getFactTableById: (id: string) => null | FactTableInterface;
+}
 
 export default function MetricValueColumn({
   metric,
   stats,
   users,
   className,
-}: {
-  metric: MetricInterface;
-  stats: SnapshotMetric;
-  users: number;
-  className?: string;
-}) {
+  style,
+  rowSpan,
+  showRatio = true,
+  noDataMessage = "no data",
+  displayCurrency,
+  getExperimentMetricById,
+  getFactTableById,
+  ...otherProps
+}: Props) {
+  const formatterOptions = { currency: displayCurrency };
+
+  const overall = getExperimentMetricFormatter(metric, getFactTableById)(
+    stats.cr,
+    formatterOptions
+  );
+
+  const numeratorValue = stats.value;
+  const denominatorValue = isRatioMetric(
+    metric,
+    !isFactMetric(metric) && metric.denominator
+      ? getExperimentMetricById(metric.denominator) ?? undefined
+      : undefined
+  )
+    ? stats.denominator ?? stats.users
+    : stats.denominator || stats.users || users;
+
+  let numerator: string;
+  let denominator = numberFormatter.format(denominatorValue);
+
+  const quantileMetric = quantileMetricType(metric);
+  if (quantileMetric && stats.stats?.count !== undefined) {
+    numerator = `${numberFormatter.format(stats.stats.count)} ${
+      quantileMetric === "event" ? "events" : "users"
+    }`;
+  } else if (isFactMetric(metric)) {
+    numerator = getColumnRefFormatter(metric.numerator, getFactTableById)(
+      numeratorValue,
+      formatterOptions
+    );
+    if (metric.metricType === "ratio" && metric.denominator) {
+      denominator = getColumnRefFormatter(metric.denominator, getFactTableById)(
+        denominatorValue,
+        formatterOptions
+      );
+    }
+  } else {
+    numerator = getMetricFormatter(
+      metric.type === "binomial" ? "count" : metric.type
+    )(numeratorValue, formatterOptions);
+  }
+
   return (
-    <td className={className}>
-      {metric && stats.value ? (
+    <td className={className} style={style} rowSpan={rowSpan} {...otherProps}>
+      {metric && stats.users ? (
         <>
-          <div className="result-number">
-            {formatConversionRate(metric?.type, stats.cr)}
-          </div>
-          <div>
-            <small className="text-muted">
-              <em
-                style={{
-                  display: "inline-block",
-                  lineHeight: "1.3em",
-                  marginTop: "0.2em",
-                }}
-              >
+          <div className="result-number">{overall}</div>
+          {showRatio && numerator ? (
+            <div className="result-number-sub text-muted">
+              <em>
                 <span
                   style={{
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {formatConversionRate(
-                    metric.type === "binomial" ? "count" : metric.type,
-                    stats.value
-                  )}
-                </span>{" "}
-                /&nbsp;
-                {numberFormatter.format(stats.users || users)}
+                  {numerator}
+                </span>
+                {!quantileMetric ? (
+                  <>
+                    {" "}
+                    /&nbsp;
+                    {denominator}
+                  </>
+                ) : null}
               </em>
-            </small>
-          </div>
+            </div>
+          ) : null}
         </>
       ) : (
-        <em>no data</em>
+        <em className="text-muted">{noDataMessage}</em>
       )}
     </td>
   );

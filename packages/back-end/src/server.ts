@@ -1,12 +1,45 @@
+import "./init/aliases";
 import app from "./app";
+import { logger } from "./util/logger";
+import { getAgendaInstance } from "./services/queueing";
 
 const server = app.listen(app.get("port"), () => {
-  console.log(
-    "  Back-end is running at http://localhost:%d in %s mode",
-    app.get("port"),
-    app.get("env")
+  logger.info(
+    `Back-end is running at http://localhost:${app.get("port")} in ${app.get(
+      "env"
+    )} mode. Press CTRL-C to stop`
   );
-  console.log("  Press CTRL-C to stop\n");
 });
 
 export default server;
+
+process.on("unhandledRejection", (rejection: unknown) => {
+  if (["string", "number", "boolean"].includes(typeof rejection)) {
+    logger.error(new Error(rejection + ""), "Unhandled Rejection");
+    return;
+  }
+  logger.error(rejection, "Unhandled Rejection");
+});
+process.on("uncaughtException", (err: Error) => {
+  logger.error(err, "Uncaught Exception");
+});
+
+process.on("SIGTERM", async () => {
+  logger.info("SIGTERM signal received");
+  onClose();
+});
+process.on("SIGINT", async () => {
+  logger.info("SIGINT signal received");
+  onClose();
+});
+function onClose() {
+  // stop Express server
+  server.close(async () => {
+    logger.info("HTTP server closed");
+    // Gracefully close Agenda
+    const agenda = getAgendaInstance();
+    await agenda.stop();
+    logger.info("Agenda closed");
+    process.exit(0);
+  });
+}

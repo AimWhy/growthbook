@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { useLocalStorage } from "../../hooks/useLocalStorage";
-import { useDefinitions } from "../../services/DefinitionsContext";
+import { useEffect, useState } from "react";
+import { isDefined } from "shared/util";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useDefinitions } from "@/services/DefinitionsContext";
 import TagsInput from "./TagsInput";
 
 interface ItemWithTags {
@@ -19,7 +20,7 @@ export interface Props {
 
 export function filterByTags<T extends ItemWithTags>(
   items: T[],
-  { tags }: TagsFilter
+  tags: string[]
 ): T[] {
   if (!tags.length) return items;
 
@@ -45,6 +46,7 @@ export default function TagsFilter({
   items,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [autofocus, setAutofocus] = useState(false);
   const counts: Record<string, number> = {};
   const availableTags: string[] = [];
   const { getTagById } = useDefinitions();
@@ -60,6 +62,15 @@ export default function TagsFilter({
     }
   });
 
+  // Only turn `autofocus` on briefly after clicking "fitler by tags"
+  useEffect(() => {
+    if (!autofocus) return;
+    const timer = setTimeout(() => {
+      setAutofocus(false);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [autofocus]);
+
   availableTags.sort((a, b) => {
     return (counts[b] || 0) - (counts[a] || 0);
   });
@@ -69,10 +80,12 @@ export default function TagsFilter({
   if (!open && !tags.length) {
     return (
       <a
-        href="#"
+        role="button"
+        className="link-purple"
         onClick={(e) => {
           e.preventDefault();
           setOpen(true);
+          setAutofocus(true);
         }}
       >
         Filter by tags...
@@ -88,9 +101,9 @@ export default function TagsFilter({
           setTags(value);
         }}
         prompt={"Filter by tags..."}
-        autoFocus={open}
+        autoFocus={open && autofocus}
         closeMenuOnSelect={true}
-        tagOptions={availableTags.map((t) => getTagById(t)).filter(Boolean)}
+        tagOptions={availableTags.map((t) => getTagById(t)).filter(isDefined)}
         creatable={false}
       />
     </div>

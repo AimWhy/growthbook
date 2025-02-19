@@ -1,60 +1,101 @@
-import { APP_ORIGIN } from "../util/secrets";
-import { ExperimentSnapshotModel } from "../models/ExperimentSnapshotModel";
-import { ExperimentModel } from "../models/ExperimentModel";
-import { getMetricsByDatasource } from "../models/MetricModel";
-import { getDataSourceById } from "../models/DataSourceModel";
-import { MetricInterface } from "../../types/metric";
-import { getQueryData } from "./queries";
 import { promisify } from "util";
 import { PythonShell } from "python-shell";
-import { ExperimentReportArgs } from "../../types/report";
-import { getReportById } from "../models/ReportModel";
-import { Queries } from "../../types/query";
-import { reportArgsFromSnapshot } from "./reports";
+import { getSnapshotAnalysis } from "shared/util";
+import { hoursBetween } from "shared/dates";
+import { APP_ORIGIN } from "back-end/src/util/secrets";
+import { findSnapshotById } from "back-end/src/models/ExperimentSnapshotModel";
+import { getExperimentById } from "back-end/src/models/ExperimentModel";
+import { getMetricMap } from "back-end/src/models/MetricModel";
+import { getDataSourceById } from "back-end/src/models/DataSourceModel";
+import { getReportById } from "back-end/src/models/ReportModel";
+import { Queries } from "back-end/types/query";
+import { QueryMap } from "back-end/src/queryRunners/QueryRunner";
+import { getQueriesByIds } from "back-end/src/models/QueryModel";
+import { ReqContext } from "back-end/types/organization";
+import { ApiReqContext } from "back-end/types/api";
+import {
+  ExperimentSnapshotAnalysisSettings,
+  ExperimentSnapshotSettings,
+} from "back-end/types/experiment-snapshot";
+import { getSnapshotSettingsFromReportArgs } from "./reports";
+import {
+  DataForStatsEngine,
+  getAnalysisSettingsForStatsEngine,
+  getMetricsAndQueryDataForStatsEngine,
+} from "./stats";
+
+async function getQueryData(
+  queries: Queries,
+  organization: string,
+  map?: QueryMap
+): Promise<QueryMap> {
+  const docs = await getQueriesByIds(
+    organization,
+    queries.map((q) => q.query)
+  );
+
+  const res: QueryMap = map || new Map();
+  docs.forEach((doc) => {
+    const match = queries.filter((q) => q.query === doc.id)[0];
+    if (!match) return;
+    res.set(match.name, doc);
+  });
+
+  return res;
+}
 
 export async function generateReportNotebook(
-  reportId: string,
-  organization: string
+  context: ReqContext | ApiReqContext,
+  reportId: string
 ): Promise<string> {
-  const report = await getReportById(organization, reportId);
+  const report = await getReportById(context.org.id, reportId);
   if (!report) {
     throw new Error("Could not find report");
   }
 
-  return generateNotebook(
-    organization,
-    report.queries,
-    report.args,
-    `/report/${report.id}`,
-    report.title,
-    ""
-  );
+  if (report.type === "experiment") {
+    // Get metrics
+    const metricMap = await getMetricMap(context);
+
+    const {
+      snapshotSettings,
+      analysisSettings,
+    } = getSnapshotSettingsFromReportArgs(report.args, metricMap);
+    return generateNotebook({
+      context,
+      queryPointers: report.queries,
+      snapshotSettings,
+      analysisSettings,
+      variationNames: report.args.variations.map((v) => v.name),
+      url: `/report/${report.id}`,
+      name: report.title,
+      description: "",
+    });
+  } else {
+    return generateExperimentNotebook(context, report.snapshot);
+  }
 }
 
 export async function generateExperimentNotebook(
-  snapshotId: string,
-  organization: string
+  context: ReqContext,
+  snapshotId: string
 ): Promise<string> {
   // Get snapshot
-  const snapshot = await ExperimentSnapshotModel.findOne({
-    id: snapshotId,
-    organization,
-  });
+  const snapshot = await findSnapshotById(context.org.id, snapshotId);
   if (!snapshot) {
     throw new Error("Cannot find snapshot");
   }
+
   if (!snapshot.queries?.length) {
     throw new Error("Snapshot does not have queries");
   }
-  if (!snapshot.results?.[0]?.variations?.[0]) {
+  const analysis = getSnapshotAnalysis(snapshot);
+  if (!analysis || !analysis.results?.[0]?.variations?.[0]) {
     throw new Error("Snapshot does not have data");
   }
 
   // Get experiment
-  const experiment = await ExperimentModel.findOne({
-    id: snapshot.experiment,
-    organization,
-  });
+  const experiment = await getExperimentById(context, snapshot.experiment);
   if (!experiment) {
     throw new Error("Cannot find snapshot");
   }
@@ -62,26 +103,42 @@ export async function generateExperimentNotebook(
     throw new Error("Experiment must use a datasource");
   }
 
-  return generateNotebook(
-    organization,
-    snapshot.queries,
-    reportArgsFromSnapshot(experiment, snapshot),
-    `/experiment/${experiment.id}`,
-    experiment.name,
-    experiment.hypothesis || ""
-  );
+  return generateNotebook({
+    context,
+    queryPointers: snapshot.queries,
+    snapshotSettings: snapshot.settings,
+    analysisSettings: analysis.settings,
+    variationNames: experiment.variations.map((v) => v.name),
+    url: `/experiment/${experiment.id}`,
+    name: experiment.name,
+    description: experiment.hypothesis || "",
+  });
 }
 
-export async function generateNotebook(
-  organization: string,
-  queryPointers: Queries,
-  args: ExperimentReportArgs,
-  url: string,
-  name: string,
-  description: string
-) {
+export async function generateNotebook({
+  context,
+  queryPointers,
+  snapshotSettings,
+  analysisSettings,
+  variationNames,
+  url,
+  name,
+  description,
+}: {
+  context: ReqContext | ApiReqContext;
+  queryPointers: Queries;
+  snapshotSettings: ExperimentSnapshotSettings;
+  analysisSettings: ExperimentSnapshotAnalysisSettings;
+  variationNames: string[];
+  url: string;
+  name: string;
+  description: string;
+}) {
   // Get datasource
-  const datasource = await getDataSourceById(args.datasource, organization);
+  const datasource = await getDataSourceById(
+    context,
+    snapshotSettings.datasourceId
+  );
   if (!datasource) {
     throw new Error("Cannot find datasource");
   }
@@ -92,73 +149,72 @@ export async function generateNotebook(
   }
 
   // Get metrics
-  const metrics = await getMetricsByDatasource(datasource.id, organization);
-  const metricMap: Map<string, MetricInterface> = new Map();
-  metrics.forEach((m: MetricInterface) => {
-    metricMap.set(m.id, m);
-  });
+  const metricMap = await getMetricMap(context);
 
   // Get queries
-  const queries = await getQueryData(queryPointers, organization);
+  const queries = await getQueryData(queryPointers, context.org.id);
 
-  const var_id_map: Record<string, number> = {};
-  args.variations.forEach((v, i) => {
-    var_id_map[v.id] = i;
+  // use min query run date as end date if missing (legacy reports)
+  let createdAt = new Date();
+  queries.forEach((q) => {
+    if (q.createdAt < createdAt) {
+      createdAt = q.createdAt;
+    }
   });
 
-  const data = JSON.stringify({
-    metrics: args.metrics
-      .map((m) => {
-        const q = queries.get(m);
-        const metric = metricMap.get(m);
-        if (!q || !metric) return null;
-        return {
-          rows: q.rawResult,
-          name: metric.name,
-          sql: q.query,
-          inverse: !!metric.inverse,
-          ignore_nulls: !!metric.ignoreNulls,
-          type: metric.type,
-        };
-      })
-      .filter(Boolean),
+  const phaseLengthDays =
+    Math.max(
+      hoursBetween(
+        snapshotSettings.startDate,
+        snapshotSettings.endDate || createdAt
+      ),
+      1
+    ) / 24;
+
+  const { queryResults, metricSettings } = getMetricsAndQueryDataForStatsEngine(
+    queries,
+    metricMap,
+    snapshotSettings
+  );
+
+  const data: DataForStatsEngine = {
+    analyses: [
+      getAnalysisSettingsForStatsEngine(
+        analysisSettings,
+        snapshotSettings.variations.map((v, i) => ({
+          ...v,
+          name: variationNames[i] || v.id,
+        })),
+        snapshotSettings.coverage ?? 1,
+        phaseLengthDays
+      ),
+    ],
+    metrics: metricSettings,
+    query_results: queryResults,
+  };
+  const datajson = JSON.stringify({
+    data: data,
     url: `${APP_ORIGIN}${url}`,
     hypothesis: description,
     name,
-    var_id_map,
-    var_names: args.variations.map((v) => v.name),
-    weights: args.variations.map((v) => v.weight),
     run_query: datasource.settings.notebookRunQuery,
   }).replace(/\\/g, "\\\\");
 
   const result = await promisify(PythonShell.runString)(
     `
-from gbstats.gen_notebook import create_notebook
-import pandas as pd
+from gbstats.gen_notebook import create_notebook, NotebookParams
+from gbstats.gbstats import process_data_dict
 import json
 
-data = json.loads("""${data}""", strict=False)
-
-metrics=[]
-for metric in data['metrics']:
-    metrics.append({
-        'rows': pd.DataFrame(metric['rows']),
-        'name': metric['name'],
-        'sql': metric['sql'],
-        'inverse': metric['inverse'],
-        'ignore_nulls': metric['ignore_nulls'],
-        'type': metric['type']
-    })
-
+data = json.loads("""${datajson}""", strict=False)
 print(create_notebook(
-    metrics=metrics,
-    url=data['url'],
-    hypothesis=data['hypothesis'],
-    name=data['name'],
-    var_id_map=data['var_id_map'],
-    var_names=data['var_names'],
-    weights=data['weights'],
-    run_query=data['run_query']
+    data=process_data_dict(data['data']),
+    params=NotebookParams(
+      url=data['url'],
+      hypothesis=data['hypothesis'],
+      name=data['name'],
+      run_query=data['run_query'],
+    ),
 ))`,
     {}
   );

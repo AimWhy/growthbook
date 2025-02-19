@@ -1,37 +1,68 @@
-import React from "react";
-import LoadingOverlay from "../components/LoadingOverlay";
-import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
-import useApi from "../hooks/useApi";
-import { useFeaturesList } from "../services/features";
-import { useEffect } from "react";
+import React, { useEffect } from "react";
 import { useRouter } from "next/router";
+import { getDemoDatasourceProjectIdForOrganization } from "shared/demo-datasource";
+import { useGrowthBook } from "@growthbook/growthbook-react";
+import { useExperiments } from "@/hooks/useExperiments";
+import { useUser } from "@/services/UserContext";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import { useFeaturesList } from "@/services/features";
 
 export default function Home(): React.ReactElement {
   const router = useRouter();
-  const { data, error } = useApi<{
-    experiments: ExperimentInterfaceStringDates[];
-  }>(`/experiments`);
+  const {
+    experiments,
+    loading: experimentsLoading,
+    error: experimentsError,
+  } = useExperiments();
 
-  const { features, loading, error: featuresError } = useFeaturesList(false);
+  const {
+    features,
+    loading: featuresLoading,
+    error: featuresError,
+  } = useFeaturesList(false);
+
+  const { organization } = useUser();
+
+  const gb = useGrowthBook();
 
   useEffect(() => {
-    if (loading || !data) {
+    if (!organization) return;
+    if (featuresLoading || experimentsLoading) {
       return;
     }
 
-    if (features.length) {
+    const demoProjectId = getDemoDatasourceProjectIdForOrganization(
+      organization.id || ""
+    );
+
+    const hasFeatures = features.some((f) => f.project !== demoProjectId);
+    const hasExperiments = experiments.some((e) => e.project !== demoProjectId);
+
+    if (hasFeatures) {
       router.replace("/features");
-    } else if (data.experiments?.length) {
+    } else if (hasExperiments) {
       router.replace("/experiments");
     } else {
-      router.replace("/getstarted");
+      if (gb.isOn("use-new-setup-flow-2")) {
+        router.replace("/setup");
+      } else {
+        router.replace("/getstarted");
+      }
     }
-  }, [features, data, loading]);
+  }, [
+    organization,
+    features.length,
+    experiments.length,
+    featuresLoading,
+    experimentsLoading,
+  ]);
 
-  if (error || featuresError) {
+  if (experimentsError || featuresError) {
     return (
       <div className="alert alert-danger">
-        {error?.message || featuresError?.message || "An error occurred"}
+        {experimentsError?.message ||
+          featuresError?.message ||
+          "An error occurred"}
       </div>
     );
   }

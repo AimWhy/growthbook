@@ -1,77 +1,24 @@
-import { AuditModel } from "../models/AuditModel";
-import { AuditInterface } from "../../types/audit";
-import uniqid from "uniqid";
-import { WatchModel } from "../models/WatchModel";
-import { QueryOptions } from "mongoose";
+import { findAuditByEntityList } from "back-end/src/models/AuditModel";
+import { getWatchedByUser } from "back-end/src/models/WatchModel";
+import { EntityType } from "back-end/src/types/Audit";
 
-export function insertAudit(data: Partial<AuditInterface>) {
-  return AuditModel.create({
-    ...data,
-    id: uniqid("aud_"),
-  });
+export function isValidAuditEntityType(type: string): type is EntityType {
+  return EntityType.includes(type as EntityType);
 }
 
-export async function findByOrganization(
-  organization: string,
-  options?: QueryOptions
+export async function getRecentWatchedAudits(
+  userId: string,
+  organization: string
 ) {
-  return AuditModel.find(
-    {
-      organization,
-    },
-    options
-  );
-}
+  const userWatches = await getWatchedByUser(organization, userId);
 
-export async function findByEntity(
-  organization: string,
-  type: string,
-  id: string,
-  options?: QueryOptions
-) {
-  return AuditModel.find(
-    {
-      organization,
-      "entity.object": type,
-      "entity.id": id,
-    },
-    options
-  );
-}
-
-export async function findByEntityParent(
-  organization: string,
-  type: string,
-  id: string,
-  options?: QueryOptions
-) {
-  return AuditModel.find(
-    {
-      organization,
-      "parent.object": type,
-      "parent.id": id,
-    },
-    options
-  );
-}
-
-export async function getWatchedAudits(userId: string, organization: string) {
-  const doc = await WatchModel.findOne({
-    userId,
-    organization,
-  });
-  if (!doc) {
+  if (!userWatches) {
     return [];
   }
   const startTime = new Date();
   startTime.setDate(startTime.getDate() - 7);
 
-  const experiments = await AuditModel.find({
-    organization,
-    "entity.object": "experiment",
-    "entity.id": {
-      $in: doc.experiments,
-    },
+  const experimentsFilter = {
     event: {
       $in: [
         "experiment.start",
@@ -83,21 +30,36 @@ export async function getWatchedAudits(userId: string, organization: string) {
     dateCreated: {
       $gte: startTime,
     },
-  });
+  };
 
-  const features = await AuditModel.find({
-    organization,
-    "entity.object": "feature",
-    "entity.id": {
-      $in: doc.features,
-    },
+  const featuresFilter = {
     event: {
-      $in: ["feature.publish", "feature.update", "feature.toggle"],
+      $in: [
+        "feature.publish",
+        "feature.update",
+        "feature.toggle",
+        "feature.create",
+        "feature.delete",
+      ],
     },
     dateCreated: {
       $gte: startTime,
     },
-  });
+  };
+
+  const experiments = await findAuditByEntityList(
+    organization,
+    "experiment",
+    userWatches.experiments,
+    experimentsFilter
+  );
+
+  const features = await findAuditByEntityList(
+    organization,
+    "feature",
+    userWatches.features,
+    featuresFilter
+  );
 
   const all = experiments
     .concat(features)

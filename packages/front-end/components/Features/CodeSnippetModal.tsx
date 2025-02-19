@@ -1,631 +1,537 @@
-import stringify from "json-stringify-pretty-compact";
-import { getTrackingCallback, TrackingType } from "../../services/codegen";
-import { getApiHost, isCloud } from "../../services/env";
-import { useState, useEffect } from "react";
-import useUser from "../../hooks/useUser";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import { SDKAttributeSchema } from "back-end/types/organization";
-import Modal from "../Modal";
-import { useAuth } from "../../services/auth";
-import Code from "../Code";
-import ControlledTabs from "../Tabs/ControlledTabs";
-import Tab from "../Tabs/Tab";
-import { useAttributeSchema } from "../../services/features";
-import { Language } from "../Code";
-import { useEnvironments } from "../../services/features";
-import SelectField from "../Forms/SelectField";
-import usePermissions from "../../hooks/usePermissions";
+import React, { useState, useEffect, ReactElement } from "react";
+import {
+  SDKConnectionInterface,
+  SDKLanguage,
+} from "back-end/types/sdk-connection";
+import {
+  FaAngleDown,
+  FaAngleRight,
+  FaExclamationCircle,
+  FaExclamationTriangle,
+} from "react-icons/fa";
+import { FeatureInterface } from "back-end/types/feature";
+import Link from "next/link";
+import { getLatestSDKVersion } from "shared/sdk-versioning";
+import useOrgSettings from "@/hooks/useOrgSettings";
+import { getApiHost, getCdnHost } from "@/services/env";
+import Code from "@/components/SyntaxHighlighting/Code";
+import { useAttributeSchema } from "@/services/features";
+import { GBHashLock } from "@/components/Icons";
+import Modal from "@/components/Modal";
+import { DocLink } from "@/components/DocLink";
+import InstallationCodeSnippet from "@/components/SyntaxHighlighting/Snippets/InstallationCodeSnippet";
+import GrowthBookSetupCodeSnippet from "@/components/SyntaxHighlighting/Snippets/GrowthBookSetupCodeSnippet";
+import BooleanFeatureCodeSnippet from "@/components/SyntaxHighlighting/Snippets/BooleanFeatureCodeSnippet";
+import ClickToCopy from "@/components/Settings/ClickToCopy";
+import TargetingAttributeCodeSnippet from "@/components/SyntaxHighlighting/Snippets/TargetingAttributeCodeSnippet";
+import SelectField from "@/components/Forms/SelectField";
+import CheckSDKConnectionModal from "@/components/GuidedGetStarted/CheckSDKConnectionModal";
+import MultivariateFeatureCodeSnippet from "@/components/SyntaxHighlighting/Snippets/MultivariateFeatureCodeSnippet";
+import SDKLanguageSelector from "./SDKConnections/SDKLanguageSelector";
+import { languageMapping } from "./SDKConnections/SDKLanguageLogo";
 
-function phpArrayFormat(json: unknown) {
-  return stringify(json)
-    .replace(/\{/g, "[")
-    .replace(/\}/g, "]")
-    .replace(/:/g, " =>");
+function trimTrailingSlash(str: string): string {
+  return str.replace(/\/*$/, "");
 }
 
-function indentLines(code: string, indent: number | string = 2) {
-  const spaces = typeof indent === "string" ? indent : " ".repeat(indent);
-  return code.split("\n").join("\n" + spaces);
-}
-
-function rubySymbol(name: string): string {
-  return name.match(/[^a-zA-Z0-9_]+/) ? `'${name}'` : `:${name}`;
-}
-
-function getExampleAttributes(attributeSchema?: SDKAttributeSchema) {
-  if (!attributeSchema?.length) return {};
-
-  // eslint-disable-next-line
-  const exampleAttributes: any = {};
-  attributeSchema.forEach(({ property, datatype, enum: enumList }) => {
-    const parts = property.split(".");
-    const last = parts.pop();
-    let current = exampleAttributes;
-    for (let i = 0; i < parts.length; i++) {
-      current[parts[i]] = current[parts[i]] || {};
-      current = current[parts[i]];
-    }
-
-    // eslint-disable-next-line
-    let value: any = null;
-    if (datatype === "boolean") {
-      value = true;
-    } else if (datatype === "number") {
-      value = 123;
-    } else if (datatype === "string") {
-      value = "foo";
-    } else if (datatype === "number[]") {
-      value = [1, 2, 3];
-    } else if (datatype === "string[]") {
-      value = ["foo", "bar"];
-    } else if (datatype === "enum") {
-      value = enumList.split(",").map((v) => v.trim())[0] ?? null;
-    }
-
-    current[last] = value;
-  });
-
-  return exampleAttributes;
-}
-
-function getApiBaseUrl(): string {
-  if (isCloud()) {
-    return `https://cdn.growthbook.io/`;
+export function getApiBaseUrl(connection?: SDKConnectionInterface): string {
+  if (connection && connection.proxy.enabled) {
+    return trimTrailingSlash(
+      connection.proxy.hostExternal ||
+        connection.proxy.host ||
+        "https://proxy.yoursite.io"
+    );
   }
-  return getApiHost() + "/";
-}
 
-function getFeaturesUrl(apiKey: string) {
-  return getApiBaseUrl() + `api/features/${apiKey || "<your api key here>"}`;
+  return trimTrailingSlash(getCdnHost() || getApiHost());
 }
 
 export default function CodeSnippetModal({
   close,
-  featureId = "my-feature",
-  defaultLanguage = "javascript",
+  feature,
+  inline,
+  cta = "Finish",
+  submit,
+  secondaryCTA,
+  sdkConnection,
+  connections,
+  mutateConnections,
+  includeCheck,
+  allowChangingConnection,
 }: {
-  close: () => void;
+  close?: () => void;
+  feature?: FeatureInterface;
   featureId?: string;
-  defaultLanguage?: Language;
+  inline?: boolean;
+  cta?: string;
+  submit?: () => void;
+  secondaryCTA?: ReactElement;
+  sdkConnection?: SDKConnectionInterface;
+  connections: SDKConnectionInterface[];
+  mutateConnections: () => Promise<unknown>;
+  includeCheck?: boolean;
+  allowChangingConnection?: boolean;
 }) {
-  const [language, setLanguage] = useState<Language>(defaultLanguage);
-  const permissions = usePermissions();
-  const [state, setState] = useState<{
-    tracking: TrackingType;
-    gaDimension?: string;
-  }>({
-    tracking: "custom",
-    gaDimension: "1",
-  });
-  const environments = useEnvironments();
+  const [currentConnectionId, setCurrentConnectionId] = useState("");
 
-  const [environment, setEnvironment] = useState(environments[0]?.id || "");
-  const [apiKey, setApiKey] = useState("");
+  useEffect(() => {
+    setCurrentConnectionId(
+      currentConnectionId || sdkConnection?.id || connections?.[0]?.id || ""
+    );
+  }, [connections]);
 
-  const { apiCall } = useAuth();
+  const currentConnection: SDKConnectionInterface | null =
+    connections.find((c) => c.id === currentConnectionId) || null;
 
-  const { settings, update } = useUser();
+  const [showTestModal, setShowTestModal] = useState(false);
 
+  const [language, setLanguage] = useState<SDKLanguage>("javascript");
+  const [version, setVersion] = useState<string>(
+    getLatestSDKVersion("javascript")
+  );
+
+  const [configOpen, setConfigOpen] = useState(true);
+  const [installationOpen, setInstallationOpen] = useState(true);
+  const [setupOpen, setSetupOpen] = useState(true);
+  const [usageOpen, setUsageOpen] = useState(true);
+  const [attributesOpen, setAttributesOpen] = useState(true);
+
+  const settings = useOrgSettings();
   const attributeSchema = useAttributeSchema();
 
-  const { datasources } = useDefinitions();
-  const exampleAttributes = getExampleAttributes(attributeSchema);
-
-  // Record the fact that the SDK instructions have been seen
   useEffect(() => {
-    if (!settings) return;
-    if (settings.sdkInstructionsViewed) return;
-    if (!permissions.organizationSettings) return;
-    (async () => {
-      await apiCall(`/organization`, {
-        method: "PUT",
-        body: JSON.stringify({
-          settings: {
-            sdkInstructionsViewed: true,
-          },
-        }),
-      });
-      await update();
-    })();
-  }, [settings]);
+    if (!currentConnection) return;
 
-  // Create API key if one doesn't exist yet
-  useEffect(() => {
-    (async () => {
-      if (!environment) {
-        return;
-      }
+    const language = currentConnection.languages[0] ?? "javascript";
+    const version =
+      (currentConnection?.languages?.length === 1 &&
+      currentConnection?.languages?.[0] === language
+        ? currentConnection?.sdkVersion
+        : undefined) ?? getLatestSDKVersion(language);
+    setLanguage(language);
+    setVersion(version);
+  }, [currentConnection]);
 
-      try {
-        setApiKey("...");
-        const key = await apiCall<{ key: string }>(
-          `/keys?preferExisting=true`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              description: `${environment} Features SDK`,
-              environment: environment,
-            }),
-          }
-        );
-        setApiKey(key.key || "");
-      } catch (e) {
-        // Happens when user doesn't have permission to create new API keys
-        console.error(e);
-      }
-    })();
-  }, [environment]);
+  if (!currentConnection) {
+    return null;
+  }
 
-  useEffect(() => {
-    const ds = datasources?.[0];
-    if (!ds) return;
-    if (ds.type === "mixpanel") {
-      setState({
-        ...state,
-        tracking: "mixpanel",
-      });
-    } else if (ds.type === "google_analytics") {
-      setState({
-        ...state,
-        tracking: "ga",
-        gaDimension: ds.params.customDimension,
-      });
-    } else {
-      setState({
-        ...state,
-        tracking: "custom",
-      });
-    }
-  }, [datasources?.[0]?.type]);
+  const { docs, docLabel, label } = languageMapping[language];
+  const hasProxy = currentConnection.proxy.enabled;
+  const apiHost = getApiBaseUrl(currentConnection);
+  const clientKey = currentConnection.key;
+  const featuresEndpoint = apiHost + "/api/features/" + clientKey;
+  const encryptionKey = currentConnection.encryptPayload
+    ? currentConnection.encryptionKey
+    : undefined;
+  const hashSecureAttributes = !!currentConnection.hashSecureAttributes;
+  const secureAttributes =
+    attributeSchema?.filter((a) =>
+      ["secureString", "secureString[]"].includes(a.datatype)
+    ) || [];
+  const secureAttributeSalt = settings.secureAttributeSalt ?? "";
+  const remoteEvalEnabled = !!currentConnection.remoteEvalEnabled;
+
+  if (showTestModal && includeCheck && !inline) {
+    return (
+      <CheckSDKConnectionModal
+        close={() => {
+          mutateConnections();
+          setShowTestModal(false);
+        }}
+        connection={currentConnection}
+        mutate={mutateConnections}
+        goToNextStep={submit}
+        cta={"Finish"}
+        showModalClose={false}
+      />
+    );
+  }
 
   return (
-    <Modal
-      close={close}
-      open={true}
-      size="lg"
-      header="Implementation Instructions"
-      submit={async () => {
-        return;
-      }}
-      cta={"Finish"}
-    >
-      {apiKey && (
-        <>
-          <strong>API Endpoint</strong>
-          <div className="row mb-2 mt-1 align-items-center">
-            {environments.length > 1 && (
+    <>
+      {showTestModal && setShowTestModal && (
+        <CheckSDKConnectionModal
+          close={() => {
+            mutateConnections();
+            setShowTestModal(false);
+          }}
+          connection={currentConnection}
+          mutate={mutateConnections}
+          goToNextStep={submit}
+          showModalClose={true}
+        />
+      )}
+      <Modal
+        trackingEventModalType=""
+        close={close}
+        secondaryCTA={secondaryCTA}
+        className="mb-4 appbox"
+        bodyClassName="p-0"
+        open={true}
+        inline={inline}
+        size={"max"}
+        header="Implementation Instructions"
+        autoCloseOnSubmit={false}
+        submit={
+          includeCheck
+            ? async () => {
+                setShowTestModal(true);
+              }
+            : submit
+            ? async () => {
+                submit();
+                close && close();
+              }
+            : undefined
+        }
+        cta={cta}
+      >
+        <div
+          className="border-bottom mb-3 px-3 py-2 position-sticky shadow-sm"
+          style={{ top: 0, zIndex: 999 }}
+        >
+          <div className="row">
+            {connections?.length > 1 && allowChangingConnection && (
               <div className="col-auto">
                 <SelectField
-                  options={environments.map((e) => ({
-                    value: e.id,
-                    label: e.id,
+                  label="SDK Connection"
+                  labelClassName="font-weight-bold small text-dark"
+                  options={connections.map((connection) => ({
+                    value: connection.id,
+                    label: connection.name,
                   }))}
-                  value={environment}
-                  onChange={(env) => setEnvironment(env)}
+                  value={currentConnection?.id ?? ""}
+                  onChange={(id) => {
+                    setCurrentConnectionId(id);
+                  }}
                 />
               </div>
             )}
             <div className="col">
-              <input
-                readOnly
-                value={getFeaturesUrl(apiKey)}
-                onFocus={(e) => e.target.select()}
-                className="form-control"
+              <SDKLanguageSelector
+                value={[language]}
+                setValue={([language]) => {
+                  const version =
+                    (currentConnection?.languages?.length === 1 &&
+                    currentConnection?.languages?.[0] === language
+                      ? currentConnection?.sdkVersion
+                      : undefined) ?? getLatestSDKVersion(language);
+                  setLanguage(language);
+                  setVersion(version);
+                }}
+                multiple={false}
+                includeOther={false}
+                limitLanguages={currentConnection.languages}
               />
             </div>
           </div>
-        </>
-      )}
-      <p>
-        Below is some starter code to integrate GrowthBook into your app. More
-        languages coming soon!
-      </p>
-      <ControlledTabs
-        active={language}
-        setActive={(language) => setLanguage(language as Language)}
-      >
-        <Tab display="Javascript" id="javascript">
-          <p>
-            Read the{" "}
-            <a
-              href="https://docs.growthbook.io/lib/js"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              full Javascript docs
-            </a>{" "}
-            for more details.
-          </p>
-          <Code language="sh" code="npm i --save @growthbook/growthbook" />
-          <Code
-            language="javascript"
-            code={`
-import { GrowthBook } from "@growthbook/growthbook";
+        </div>
+        <div className="px-3">
+          {language === "other" ? (
+            <div className="mb-4">
+              <p>
+                We don&apos;t have an SDK for your language yet, but we do have
+                extensive documentation if you want to build your own and
+                contribute it back to the community!{" "}
+              </p>
+              <DocLink
+                docSection="buildYourOwn"
+                className="btn btn-outline-primary"
+              >
+                View Documentation
+              </DocLink>
+            </div>
+          ) : (
+            <p>
+              Below is some starter code to integrate GrowthBook into your app.
+              Read the{" "}
+              <DocLink docSection={docs}>{docLabel || label} docs</DocLink> for
+              more details.
+            </p>
+          )}
+          {!language.match(/^nocode/) && (
+            <div className="mb-3">
+              <h4
+                className="cursor-pointer"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setConfigOpen(!configOpen);
+                }}
+              >
+                {docLabel || label} Config Settings{" "}
+                {configOpen ? <FaAngleDown /> : <FaAngleRight />}
+              </h4>
+              {configOpen && (
+                <div className="appbox bg-light p-3">
+                  <table className="gbtable table table-bordered table-sm">
+                    <tbody>
+                      <tr>
+                        <th
+                          className="pl-3"
+                          style={{ verticalAlign: "middle" }}
+                        >
+                          Full API Endpoint
+                          {hasProxy ? (
+                            <>
+                              {" "}
+                              <small>(proxied)</small>
+                            </>
+                          ) : null}
+                        </th>
+                        <td>
+                          <ClickToCopy>{featuresEndpoint}</ClickToCopy>
+                        </td>
+                      </tr>
+                      <tr>
+                        <th
+                          className="pl-3"
+                          style={{ verticalAlign: "middle" }}
+                        >
+                          API Host
+                          {hasProxy ? (
+                            <>
+                              {" "}
+                              <small>(proxied)</small>
+                            </>
+                          ) : null}
+                        </th>
+                        <td>
+                          <ClickToCopy>{apiHost}</ClickToCopy>
+                        </td>
+                      </tr>
+                      <tr>
+                        <th
+                          className="pl-3"
+                          style={{ verticalAlign: "middle" }}
+                        >
+                          Client Key
+                        </th>
+                        <td>
+                          <ClickToCopy>{clientKey}</ClickToCopy>
+                        </td>
+                      </tr>
+                      {encryptionKey && (
+                        <tr>
+                          <th
+                            className="pl-3"
+                            style={{ verticalAlign: "middle" }}
+                          >
+                            Decryption Key
+                          </th>
+                          <td>
+                            <ClickToCopy>{encryptionKey}</ClickToCopy>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
-// Create a GrowthBook instance
-const growthbook = new GrowthBook({
-  trackingCallback: (experiment, result) => {
-    ${indentLines(
-      getTrackingCallback(
-        state.tracking,
-        state.gaDimension + "",
-        "experiment.key",
-        "result.variationId"
-      ),
-      4
-    )}
-  }
-});
+          {language !== "other" && (
+            <div className="mb-3">
+              <h4
+                className="cursor-pointer"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setInstallationOpen(!installationOpen);
+                }}
+              >
+                Installation{" "}
+                {installationOpen ? <FaAngleDown /> : <FaAngleRight />}
+              </h4>
+              {installationOpen && (
+                <div className="appbox bg-light p-3">
+                  <InstallationCodeSnippet
+                    language={language}
+                    apiHost={apiHost}
+                    apiKey={clientKey}
+                    encryptionKey={encryptionKey}
+                    remoteEvalEnabled={remoteEvalEnabled}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {language !== "other" && (
+            <div className="mb-3">
+              <h4
+                className="cursor-pointer"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setSetupOpen(!setupOpen);
+                }}
+              >
+                Setup {setupOpen ? <FaAngleDown /> : <FaAngleRight />}
+              </h4>
+              {setupOpen && (
+                <div className="appbox bg-light p-3">
+                  <GrowthBookSetupCodeSnippet
+                    language={language}
+                    version={version}
+                    apiHost={apiHost}
+                    apiKey={clientKey}
+                    encryptionKey={encryptionKey}
+                    remoteEvalEnabled={remoteEvalEnabled}
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
-// Load feature definitions from API${
-              isCloud()
-                ? ""
-                : `\n// In production, we recommend putting a CDN in front of the API endpoint`
-            }
-const FEATURES_ENDPOINT = "${getFeaturesUrl(apiKey)}";
-fetch(FEATURES_ENDPOINT)
-  .then((res) => res.json())
-  .then((json) => {
-    growthbook.setFeatures(json.features);
-  })
-  .catch(() => {
-    console.log("Failed to fetch feature definitions from GrowthBook");
-  });
+          {!(language.match(/^edge-/) || language === "other") && (
+            <div className="mb-3">
+              <h4
+                className="cursor-pointer"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setAttributesOpen(!attributesOpen);
+                }}
+              >
+                Targeting Attributes{" "}
+                {attributesOpen ? <FaAngleDown /> : <FaAngleRight />}
+              </h4>
+              {attributesOpen && (
+                <div className="appbox bg-light p-3">
+                  <TargetingAttributeCodeSnippet
+                    language={language}
+                    hashSecureAttributes={hashSecureAttributes}
+                    secureAttributeSalt={secureAttributeSalt}
+                    version={version}
+                  />
 
-// TODO: replace with real targeting attributes
-growthbook.setAttributes(${indentLines(stringify(exampleAttributes), 2)});
+                  {hashSecureAttributes && secureAttributes.length > 0 && (
+                    <div
+                      className="appbox mt-4"
+                      style={{ background: "rgb(209 236 241 / 25%)" }}
+                    >
+                      <div className="alert alert-info mb-0">
+                        <GBHashLock className="text-blue" /> This connection has{" "}
+                        <strong>secure attribute hashing</strong> enabled. You
+                        must manually hash all attributes with datatype{" "}
+                        <code>secureString</code> or <code>secureString[]</code>{" "}
+                        in your SDK implementation code.
+                      </div>
+                      <div className="px-3 pb-3">
+                        <div className="mt-3">
+                          Your organization currently has{" "}
+                          {secureAttributes.length} secure attribute
+                          {secureAttributes.length === 1 ? "" : "s"}
+                          {secureAttributes.length > 0 && (
+                            <>
+                              {" "}
+                              which need to be hashed before using them in the
+                              SDK:
+                              <table className="table table-borderless w-auto mt-1 ml-2">
+                                <tbody>
+                                  {secureAttributes.map((a, i) => (
+                                    <tr key={i}>
+                                      <td className="pt-1 pb-0">
+                                        <code className="font-weight-bold">
+                                          {a.property}
+                                        </code>
+                                      </td>
+                                      <td className="pt-1 pb-0">
+                                        <span className="text-gray">
+                                          {a.datatype}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </>
+                          )}
+                        </div>
+                        <div className="mt-3">
+                          To hash an attribute, use a cryptographic library with{" "}
+                          <strong>SHA-256</strong> support, and compute the
+                          SHA-256 hashed value of your attribute <em>plus</em>{" "}
+                          your organization&apos;s secure attribute salt.
+                        </div>
+                        <div className="mt-2">
+                          Example, using your organization&apos;s secure
+                          attribute salt:
+                          {secureAttributeSalt === "" && (
+                            <div className="alert alert-warning mt-2 px-2 py-1">
+                              <FaExclamationTriangle /> Your organization has an
+                              empty salt string. Add a salt string in your{" "}
+                              <Link href="/settings">
+                                organization settings
+                              </Link>{" "}
+                              to improve the security of hashed targeting
+                              conditions.
+                            </div>
+                          )}
+                          <Code
+                            filename="pseudocode"
+                            language="javascript"
+                            code={`const salt = "${secureAttributeSalt}";
 
-// Use a feature!
-if (growthbook.isOn(${JSON.stringify(featureId)})) {
-  // ...
-}
-`.trim()}
-          />
-        </Tab>
-        <Tab display="React" id="tsx">
-          <p>
-            Read the{" "}
-            <a
-              href="https://docs.growthbook.io/lib/react"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              full React docs
-            </a>{" "}
-            for more details.
-          </p>
-          <Code
-            language="sh"
-            code="npm i --save @growthbook/growthbook-react"
-          />
-          <Code
-            language="tsx"
-            code={`
-import { GrowthBook, GrowthBookProvider, useFeature } from "@growthbook/growthbook-react";
-import { useEffect } from "react";
+// hashing a secureString attribute
+myAttribute = sha256(salt + myAttribute);
 
-// Create a GrowthBook instance
-const growthbook = new GrowthBook({
-  trackingCallback: (experiment, result) => {
-    ${indentLines(
-      getTrackingCallback(
-        state.tracking,
-        state.gaDimension + "",
-        "experiment.key",
-        "result.variationId"
-      ),
-      4
-    )}
-  }
-});
+// hashing a secureString[] attribute
+myAttributes = myAttributes.map(attribute => sha256(salt + attribute));`}
+                          />
+                        </div>
+                        <div className="alert text-warning-orange mt-3 mb-0 px-2 py-1">
+                          <FaExclamationCircle /> When using an insecure
+                          environment (such as a browser), do not rely
+                          exclusively on hashing as a means of securing highly
+                          sensitive data. Hashing is an obfuscation technique
+                          that makes it very difficult, but not impossible, to
+                          extract sensitive data.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
-export default function MyApp() {
-  useEffect(() => {
-    // Load feature definitions from API${
-      isCloud()
-        ? ""
-        : `\n    // In production, we recommend putting a CDN in front of the API endpoint`
-    }
-    fetch("${getFeaturesUrl(apiKey)}")
-      .then((res) => res.json())
-      .then((json) => {
-        growthbook.setFeatures(json.features);
-      });
-    
-    // TODO: replace with real targeting attributes
-    growthbook.setAttributes(${indentLines(stringify(exampleAttributes), 4)})
-  }, [])
-
-  return (
-    <GrowthBookProvider growthbook={growthbook}>
-      <MyComponent/>
-    </GrowthBookProvider>
-  )
-}
-
-// Use a feature!
-function MyComponent() {
-  const feature = useFeature(${JSON.stringify(featureId)})
-  return feature.on ? "New version" : "Old version"
-}
-            `.trim()}
-          />
-        </Tab>
-        <Tab display="Go" id="go">
-          <p>
-            Read the{" "}
-            <a
-              href="https://docs.growthbook.io/lib/go"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              full Golang SDK docs
-            </a>{" "}
-            for more details.
-          </p>
-          <Code
-            language="sh"
-            code="go get github.com/growthbook/growthbook-golang"
-          />
-          <Code
-            language="go"
-            code={`
-package main
-
-import (
-	"encoding/json"
-	"fmt"
-	growthbook "github.com/growthbook/growthbook-golang"
-	"io/ioutil"
-	"log"
-	"net/http"
-)
-
-// Features API response
-type GrowthBookApiResp struct {
-	Features json.RawMessage
-	Status   int
-}
-
-func GetFeatureMap() []byte {
-	// Fetch features JSON from api
-	// In production, we recommend adding a db or cache layer
-	resp, err := http.Get("${getFeaturesUrl(apiKey)}")
-	if err != nil {
-		log.Println(err)
-	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	// Just return the features map from the API response
-	apiResp := &GrowthBookApiResp{}
-	_ = json.Unmarshal(body, apiResp)
-	return apiResp.Features
-}
-
-func main() {
-	featureMap := GetFeatureMap()
-	features := growthbook.ParseFeatureMap(featureMap)
-
-	context := growthbook.NewContext().
-		WithFeatures(features).
-		// TODO: Real user attributes
-		WithAttributes(growthbook.Attributes${indentLines(
-      JSON.stringify(exampleAttributes, null, "\t"),
-      "\t\t"
-    )
-      .replace(/null/g, "nil")
-      .replace(/\n(\t+)\}/, ",\n$1}")}).
-		// TODO: Track in your analytics system
-		WithTrackingCallback(func(experiment *growthbook.Experiment, result *growthbook.ExperimentResult) {
-			log.Println(fmt.Sprintf("Experiment: %s, Variation: %d", experiment.Key, result.VariationID))
-		})
-	gb := growthbook.New(context)
-
-	// Use a feature!
-	if gb.Feature(${JSON.stringify(featureId)}).On {
-		// ...
-	}
-}
-            `.trim()}
-          />
-        </Tab>{" "}
-        <Tab display="Kotlin (Android)" id="kotlin">
-          <p>
-            Read the{" "}
-            <a
-              href="https://docs.growthbook.io/lib/kotlin"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              full Kotlin (Android) SDK docs
-            </a>{" "}
-            for more details.
-          </p>
-          <Code
-            language="javascript"
-            code={`repositories {
-    mavenCentral()
-}
-
-dependencies {
-    implementation 'io.growthbook.sdk:GrowthBook:1.+'
-}`}
-          />
-          <Code
-            language="kotlin"
-            code={`
-import com.sdk.growthbook.GBSDKBuilder
-
-// TODO: Real user attributes
-val attrs = HashMap<String, Any>()
-${Object.keys(exampleAttributes)
-  .map((k) => {
-    return `attrs.put("${k}", ${JSON.stringify(exampleAttributes[k])})`;
-  })
-  .join("\n")}
-
-val gb = GBSDKBuilder(
-  // Fetch and cache feature definitions from GrowthBook API${
-    !isCloud() ? "\n  // We recommend using a CDN in production" : ""
-  }
-  apiKey = "${apiKey || "<your api key here>"}",
-  hostURL = "${getApiBaseUrl()}",
-  attributes = attrs,
-  trackingCallback = { gbExperiment, gbExperimentResult ->
-    // TODO: track in your analytics system
-  }
-).initialize()
-
-if (gb.feature(${JSON.stringify(featureId)}).on) {
-  // Feature is enabled!
-}
-            `.trim()}
-          />
-        </Tab>
-        <Tab display="Ruby" id="ruby">
-          <p>
-            Read the{" "}
-            <a
-              href="https://docs.growthbook.io/lib/ruby"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              full Ruby SDK docs
-            </a>{" "}
-            for more details.
-          </p>
-          <Code language="sh" code={`gem install growthbook`} />
-          <Code
-            language="ruby"
-            code={`
-require 'growthbook'
-require 'uri'
-require 'net/http'
-require 'json'
-
-# Fetch features from GrowthBook API
-# TODO: In production, we recommend adding a caching layer (Redis, etc.)
-uri = URI('${getFeaturesUrl(apiKey)}')
-res = Net::HTTP.get_response(uri)
-features = res.is_a?(Net::HTTPSuccess) ? JSON.parse(res.body)['features'] : nil
-
-# Tracking callback when users are put into an experiment
-class MyImpressionListener
-  def on_experiment_viewed(experiment, result)
-    puts "Assigned variation #{result.variation_id} in experiment #{experiment.key}"
-  end
-end
-
-# Create a context for the current user/request
-gb = Growthbook::Context.new(
-  features: features,
-  # TODO: Real user attributes for targeting
-  attributes: ${indentLines(stringify(exampleAttributes), 4).replace(
-    /: null/g,
-    ": nil"
-  )},
-  listener: MyImpressionListener.new
-)
-
-if gb.on? ${rubySymbol(featureId)}
-  puts 'My feature is on!'
-end
-            `.trim()}
-          />
-        </Tab>
-        <Tab display="PHP" id="php">
-          <p>
-            Read the{" "}
-            <a
-              href="https://docs.growthbook.io/lib/php"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              full PHP SDK docs
-            </a>{" "}
-            for more details.
-          </p>
-          <Code language="sh" code={`composer require growthbook/growthbook`} />
-          <Code
-            language="php"
-            code={`
-use Growthbook\\Growthbook;
-
-// TODO: Real user attributes
-$attributes = ${phpArrayFormat(exampleAttributes)};
-
-// Fetch feature definitions from GrowthBook API
-// In production, we recommend adding a db or cache layer
-const FEATURES_ENDPOINT = '${getFeaturesUrl(apiKey)}';
-$apiResponse = json_decode(file_get_contents(FEATURES_ENDPOINT), true);
-$features = $apiResponse["features"];
-
-// Create a GrowthBook instance
-$growthbook = Growthbook::create()
-  ->withAttributes($attributes)
-  ->withFeatures($features)
-  ->withTrackingCallback(function ($experiment, $result) {
-    // TODO: track in your analytics system
-  });
-
-if ($growthbook->isOn(${JSON.stringify(featureId)})) {
-  // Feature is enabled!
-}
-            `.trim()}
-          />
-        </Tab>
-        <Tab display="Python" id="python">
-          <p>
-            Read the{" "}
-            <a
-              href="https://docs.growthbook.io/lib/python"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              full Python SDK docs
-            </a>{" "}
-            for more details.
-          </p>
-          <Code language="sh" code={`pip install growthbook`} />
-          <Code
-            language="python"
-            code={`
-import requests
-from growthbook import GrowthBook
-
-# Fetch feature definitions from GrowthBook API
-# In production, we recommend adding a db or cache layer
-apiResp = requests.get("${getFeaturesUrl(apiKey)}")
-features = apiResp.json()["features"]
-
-# TODO: Real user attributes
-attributes = ${stringify(exampleAttributes)
-              .replace(/: true/g, ": True")
-              .replace(/: false/g, ": False")
-              .replace(/: null/g, ": None")}
-
-# Tracking callback when someone is put in an experiment
-def on_experiment_viewed(experiment, result):
-  # Use whatever event tracking system you want
-  print({
-    'experimentId': experiment.key,
-    'variationId': result.variationId
-  })
-
-# Create a GrowthBook instance
-gb = GrowthBook(
-  attributes = attributes,
-  features = features,
-  trackingCallback = on_experiment_viewed
-)
-
-# Use a feature
-if gb.isOn(${JSON.stringify(featureId)}):
-  print("Feature is enabled!")
-            `.trim()}
-          />
-        </Tab>
-      </ControlledTabs>
-    </Modal>
+          {!(language.match(/^edge-/) || language === "other") && (
+            <div className="mb-3">
+              <h4
+                className="cursor-pointer"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setUsageOpen(!usageOpen);
+                }}
+              >
+                Usage {usageOpen ? <FaAngleDown /> : <FaAngleRight />}
+              </h4>
+              {usageOpen && (
+                <div className="appbox bg-light p-3">
+                  {(!feature || feature?.valueType === "boolean") && (
+                    <>
+                      On/Off feature:
+                      <BooleanFeatureCodeSnippet
+                        language={language}
+                        featureId={feature?.id || "my-feature"}
+                      />
+                    </>
+                  )}
+                  {(!feature || feature?.valueType !== "boolean") && (
+                    <>
+                      {feature?.valueType || "String"} feature:
+                      <MultivariateFeatureCodeSnippet
+                        valueType={feature?.valueType || "string"}
+                        language={language}
+                        featureId={feature?.id || "my-feature"}
+                      />
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </Modal>
+    </>
   );
 }

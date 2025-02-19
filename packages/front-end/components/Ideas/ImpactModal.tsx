@@ -1,16 +1,16 @@
 import Link from "next/link";
 import { FC } from "react";
 import { useForm } from "react-hook-form";
-import { useAuth } from "../../services/auth";
 import { IdeaInterface } from "back-end/types/idea";
 import { ImpactEstimateInterface } from "back-end/types/impact-estimate";
-import Modal from "../Modal";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import Field from "../Forms/Field";
-import SelectField from "../Forms/SelectField";
+import { useAuth } from "@/services/auth";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import Modal from "@/components/Modal";
+import Field from "@/components/Forms/Field";
+import SelectField from "@/components/Forms/SelectField";
 
 const ImpactModal: FC<{
-  idea?: IdeaInterface;
+  idea: IdeaInterface;
   estimate?: ImpactEstimateInterface;
   close: () => void;
   mutate: () => void;
@@ -41,6 +41,7 @@ const ImpactModal: FC<{
 
   return (
     <Modal
+      trackingEventModalType=""
       header="Impact Score Parameters"
       open={true}
       submit={form.handleSubmit(async (value) => {
@@ -58,6 +59,7 @@ const ImpactModal: FC<{
               body: JSON.stringify({
                 metric: value.metric,
                 segment: value.segment || null,
+                ideaId: idea.id || null,
               }),
             }
           );
@@ -163,10 +165,7 @@ const ImpactModal: FC<{
           !possibleSegments?.length ? (
             <>
               No segments defined for the selected metric&apos;s datasource.{" "}
-              <Link href="/segments">
-                <a>Add Segments</a>
-              </Link>
-              .
+              <Link href="/segments">Add Segments</Link>.
             </>
           ) : null
         }

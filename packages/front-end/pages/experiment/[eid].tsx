@@ -1,58 +1,67 @@
 import { useRouter } from "next/router";
-import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
-import useApi from "../../hooks/useApi";
-import LoadingOverlay from "../../components/LoadingOverlay";
-import React, { ReactElement, useState } from "react";
-import useSwitchOrg from "../../services/useSwitchOrg";
+import {
+  ExperimentInterfaceStringDates,
+  LinkedFeatureInfo,
+} from "back-end/types/experiment";
+import { VisualChangesetInterface } from "back-end/types/visual-changeset";
+import { URLRedirectInterface } from "back-end/types/url-redirect";
+import React, { ReactElement, useEffect, useState } from "react";
 import { IdeaInterface } from "back-end/types/idea";
-import SinglePage from "../../components/Experiment/SinglePage";
-import MultiTabPage from "../../components/Experiment/MultiTabPage";
-import { useLocalStorage } from "../../hooks/useLocalStorage";
-import EditMetricsForm from "../../components/Experiment/EditMetricsForm";
-import StopExperimentForm from "../../components/Experiment/StopExperimentForm";
-import usePermissions from "../../hooks/usePermissions";
-import EditVariationsForm from "../../components/Experiment/EditVariationsForm";
-import EditInfoForm from "../../components/Experiment/EditInfoForm";
-import NewExperimentForm from "../../components/Experiment/NewExperimentForm";
-import EditTagsForm from "../../components/Tags/EditTagsForm";
-import EditProjectForm from "../../components/Experiment/EditProjectForm";
-import { useAuth } from "../../services/auth";
-import Link from "next/link";
-import { GBCircleArrowLeft } from "../../components/Icons";
-import SnapshotProvider from "../../components/Experiment/SnapshotProvider";
-import NewPhaseForm from "../../components/Experiment/NewPhaseForm";
-import track from "../../services/track";
-import EditPhasesModal from "../../components/Experiment/EditPhasesModal";
+import { includeExperimentInPayload } from "shared/util";
+import useApi from "@/hooks/useApi";
+import LoadingOverlay from "@/components/LoadingOverlay";
+import useSwitchOrg from "@/services/useSwitchOrg";
+import EditMetricsForm from "@/components/Experiment/EditMetricsForm";
+import StopExperimentForm from "@/components/Experiment/StopExperimentForm";
+import EditVariationsForm from "@/components/Experiment/EditVariationsForm";
+import NewExperimentForm from "@/components/Experiment/NewExperimentForm";
+import EditTagsForm from "@/components/Tags/EditTagsForm";
+import { useAuth } from "@/services/auth";
+import SnapshotProvider from "@/components/Experiment/SnapshotProvider";
+import NewPhaseForm from "@/components/Experiment/NewPhaseForm";
+import EditPhasesModal from "@/components/Experiment/EditPhasesModal";
+import EditPhaseModal from "@/components/Experiment/EditPhaseModal";
+import EditTargetingModal from "@/components/Experiment/EditTargetingModal";
+import TabbedPage from "@/components/Experiment/TabbedPage";
+import PageHead from "@/components/Layout/PageHead";
+import usePermissionsUtil from "@/hooks/usePermissionsUtils";
 
 const ExperimentPage = (): ReactElement => {
+  const permissionsUtil = usePermissionsUtil();
   const router = useRouter();
   const { eid } = router.query;
-
-  const permissions = usePermissions();
-
-  const [useSinglePage, setUseSinglePage] = useLocalStorage(
-    "new-exp-page-layout",
-    false
-  );
 
   const [stopModalOpen, setStopModalOpen] = useState(false);
   const [metricsModalOpen, setMetricsModalOpen] = useState(false);
   const [variationsModalOpen, setVariationsModalOpen] = useState(false);
-  const [editModalOpen, setEditModalOpen] = useState(false);
   const [duplicateModalOpen, setDuplicateModalOpen] = useState(false);
   const [tagsModalOpen, setTagsModalOpen] = useState(false);
-  const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [phaseModalOpen, setPhaseModalOpen] = useState(false);
   const [editPhasesOpen, setEditPhasesOpen] = useState(false);
+  const [editPhaseId, setEditPhaseId] = useState<number | null>(null);
+  const [targetingModalOpen, setTargetingModalOpen] = useState(false);
+  const [checklistItemsRemaining, setChecklistItemsRemaining] = useState<
+    number | null
+  >(null);
 
   const { data, error, mutate } = useApi<{
     experiment: ExperimentInterfaceStringDates;
     idea?: IdeaInterface;
+    visualChangesets: VisualChangesetInterface[];
+    linkedFeatures: LinkedFeatureInfo[];
+    envs: string[];
+    urlRedirects: URLRedirectInterface[];
   }>(`/experiment/${eid}`);
 
-  useSwitchOrg(data?.experiment?.organization);
+  useSwitchOrg(data?.experiment?.organization ?? null);
 
   const { apiCall } = useAuth();
+
+  useEffect(() => {
+    if (data?.experiment?.type === "multi-armed-bandit") {
+      router.replace(window.location.href.replace("experiment/", "bandit/"));
+    }
+  }, [data, router]);
 
   if (error) {
     return <div>There was a problem loading the experiment</div>;
@@ -61,30 +70,60 @@ const ExperimentPage = (): ReactElement => {
     return <LoadingOverlay />;
   }
 
-  const { experiment, idea } = data;
+  const {
+    experiment,
+    visualChangesets = [],
+    linkedFeatures = [],
+    urlRedirects = [],
+    envs = [],
+  } = data;
 
-  // TODO: more cases where the new page won't work?
-  const supportsSinglePage = experiment.implementation !== "visual";
+  const canEditExperiment =
+    permissionsUtil.canViewExperimentModal(experiment.project) &&
+    !experiment.archived;
 
-  const canEdit = permissions.createAnalyses && !experiment.archived;
+  let canRunExperiment = !experiment.archived;
+  if (envs.length > 0) {
+    if (!permissionsUtil.canRunExperiment(experiment, envs)) {
+      canRunExperiment = false;
+    }
+  }
 
-  const editMetrics = canEdit ? () => setMetricsModalOpen(true) : null;
-  const editResult = canEdit ? () => setStopModalOpen(true) : null;
-  const editVariations = canEdit ? () => setVariationsModalOpen(true) : null;
-  const editInfo = canEdit ? () => setEditModalOpen(true) : null;
-  const duplicate = canEdit ? () => setDuplicateModalOpen(true) : null;
-  const editTags = canEdit ? () => setTagsModalOpen(true) : null;
-  const editProject = canEdit ? () => setProjectModalOpen(true) : null;
-  const newPhase = canEdit ? () => setPhaseModalOpen(true) : null;
-  const editPhases = canEdit ? () => setEditPhasesOpen(true) : null;
+  const editMetrics = canEditExperiment
+    ? () => setMetricsModalOpen(true)
+    : null;
+  const editResult = canRunExperiment ? () => setStopModalOpen(true) : null;
+  const editVariations = canRunExperiment
+    ? () => setVariationsModalOpen(true)
+    : null;
+  const duplicate = canEditExperiment
+    ? () => setDuplicateModalOpen(true)
+    : null;
+  const editTags = canEditExperiment ? () => setTagsModalOpen(true) : null;
+  const newPhase = canRunExperiment ? () => setPhaseModalOpen(true) : null;
+  const editPhases = canRunExperiment ? () => setEditPhasesOpen(true) : null;
+  const editPhase = canRunExperiment
+    ? (i: number | null) => setEditPhaseId(i)
+    : null;
+  const editTargeting = canRunExperiment
+    ? () => setTargetingModalOpen(true)
+    : null;
+
+  const safeToEdit =
+    experiment.status !== "running" ||
+    !includeExperimentInPayload(
+      experiment,
+      linkedFeatures.map((f) => f.feature)
+    );
 
   return (
-    <div>
+    <>
       {metricsModalOpen && (
         <EditMetricsForm
           experiment={experiment}
           cancel={() => setMetricsModalOpen(false)}
           mutate={mutate}
+          source="eid"
         />
       )}
       {stopModalOpen && (
@@ -92,6 +131,7 @@ const ExperimentPage = (): ReactElement => {
           close={() => setStopModalOpen(false)}
           mutate={mutate}
           experiment={experiment}
+          source="eid"
         />
       )}
       {variationsModalOpen && (
@@ -99,13 +139,7 @@ const ExperimentPage = (): ReactElement => {
           experiment={experiment}
           cancel={() => setVariationsModalOpen(false)}
           mutate={mutate}
-        />
-      )}
-      {editModalOpen && (
-        <EditInfoForm
-          experiment={experiment}
-          cancel={() => setEditModalOpen(false)}
-          mutate={mutate}
+          source="eid"
         />
       )}
       {duplicateModalOpen && (
@@ -116,7 +150,8 @@ const ExperimentPage = (): ReactElement => {
             name: experiment.name + " (Copy)",
             trackingKey: "",
           }}
-          source="duplicate"
+          source="duplicate-eid"
+          duplicate={true}
         />
       )}
       {tagsModalOpen && (
@@ -130,14 +165,7 @@ const ExperimentPage = (): ReactElement => {
           }}
           cancel={() => setTagsModalOpen(false)}
           mutate={mutate}
-        />
-      )}
-      {projectModalOpen && (
-        <EditProjectForm
-          cancel={() => setProjectModalOpen(false)}
-          mutate={mutate}
-          current={experiment.project}
-          apiEndpoint={`/experiment/${experiment.id}`}
+          source="eid"
         />
       )}
       {phaseModalOpen && (
@@ -145,6 +173,17 @@ const ExperimentPage = (): ReactElement => {
           close={() => setPhaseModalOpen(false)}
           mutate={mutate}
           experiment={experiment}
+          source="eid"
+        />
+      )}
+      {editPhaseId !== null && (
+        <EditPhaseModal
+          close={() => setEditPhaseId(null)}
+          experiment={experiment}
+          mutate={mutate}
+          i={editPhaseId}
+          editTargeting={editTargeting}
+          source="eid"
         />
       )}
       {editPhasesOpen && (
@@ -152,91 +191,52 @@ const ExperimentPage = (): ReactElement => {
           close={() => setEditPhasesOpen(false)}
           mutateExperiment={mutate}
           experiment={experiment}
+          editTargeting={editTargeting}
+          source="eid"
         />
       )}
-      <div className="container-fluid">
-        {supportsSinglePage &&
-          (useSinglePage ? (
-            <div className="container-fluid pagecontents">
-              <div className="bg-light border-bottom p-2 mb-3 d-flex">
-                <div>
-                  <Link href="/experiments">
-                    <a>
-                      <GBCircleArrowLeft /> Back to all experiments
-                    </a>
-                  </Link>
-                </div>
-                <div className="text-center ml-auto">
-                  <strong>
-                    <a
-                      href="#"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        track("View Old Experiment Page");
-                        setUseSinglePage(false);
-                      }}
-                    >
-                      Switch back to the old page
-                    </a>
-                  </strong>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-info text-light p-2 text-center mb-3">
-              <span>
-                Try the new and improved experiment view!{" "}
-                <strong>
-                  <a
-                    href="#"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      track("View New Experiment Page");
-                      setUseSinglePage(true);
-                    }}
-                    className="text-white"
-                  >
-                    Switch Now
-                  </a>
-                </strong>
-              </span>
-            </div>
-          ))}
-        {!supportsSinglePage && <div className="mb-2" />}
-        <SnapshotProvider experiment={experiment}>
-          {supportsSinglePage && useSinglePage ? (
-            <SinglePage
-              experiment={experiment}
-              idea={idea}
-              mutate={mutate}
-              editMetrics={editMetrics}
-              editResult={editResult}
-              editVariations={editVariations}
-              duplicate={duplicate}
-              editProject={editProject}
-              editTags={editTags}
-              newPhase={newPhase}
-              editPhases={editPhases}
-            />
-          ) : (
-            <MultiTabPage
-              experiment={experiment}
-              idea={idea}
-              mutate={mutate}
-              editMetrics={editMetrics}
-              editResult={editResult}
-              editInfo={editInfo}
-              editVariations={editVariations}
-              duplicate={duplicate}
-              editProject={editProject}
-              editTags={editTags}
-              newPhase={newPhase}
-              editPhases={editPhases}
-            />
-          )}
-        </SnapshotProvider>
-      </div>
-    </div>
+      {targetingModalOpen && (
+        <EditTargetingModal
+          close={() => setTargetingModalOpen(false)}
+          mutate={mutate}
+          experiment={experiment}
+          safeToEdit={safeToEdit}
+          // source="eid"
+        />
+      )}
+
+      <PageHead
+        breadcrumb={[
+          {
+            display: "Experiments",
+            href: `/experiments`,
+          },
+          { display: experiment.name },
+        ]}
+      />
+
+      <SnapshotProvider experiment={experiment}>
+        <TabbedPage
+          experiment={experiment}
+          linkedFeatures={linkedFeatures}
+          mutate={mutate}
+          visualChangesets={visualChangesets}
+          urlRedirects={urlRedirects}
+          editMetrics={editMetrics}
+          editResult={editResult}
+          editVariations={editVariations}
+          duplicate={duplicate}
+          editTags={editTags}
+          newPhase={newPhase}
+          editPhases={editPhases}
+          editPhase={editPhase}
+          envs={envs}
+          editTargeting={editTargeting}
+          checklistItemsRemaining={checklistItemsRemaining}
+          setChecklistItemsRemaining={setChecklistItemsRemaining}
+        />
+      </SnapshotProvider>
+    </>
   );
 };
 

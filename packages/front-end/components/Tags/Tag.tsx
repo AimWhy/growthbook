@@ -1,31 +1,43 @@
 import React from "react";
-import { useDefinitions } from "../../services/DefinitionsContext";
+import { MarginProps } from "@radix-ui/themes/dist/esm/props/margin.props.js";
+import { useDefinitions } from "@/services/DefinitionsContext";
+import Badge from "@/components/Radix/Badge";
+import { RadixColor } from "@/components/Radix/HelperText";
 
-interface Props {
+export const TAG_COLORS = [
+  "blue",
+  "teal",
+  "pink",
+  "orange",
+  "lime",
+  "gray",
+  "gold",
+] as const;
+
+type Props = {
   tag: string;
-  color?: string;
+  color?: RadixColor;
   description?: string;
-}
+  skipMargin?: boolean;
+} & MarginProps;
 
-export default function Tag({ tag, color, description }: Props) {
+export default function Tag({ tag, color, description, skipMargin }: Props) {
   const { getTagById } = useDefinitions();
   const fullTag = getTagById(tag);
 
   const displayTitle = description ?? fullTag?.description ?? "";
-  const displayColor = color ?? fullTag?.color ?? "#029dd1";
+
+  const tagColor = color ?? fullTag?.color ?? "blue";
 
   return (
-    <span
-      className="tag mr-2 badge badge-primary"
+    <Badge
       title={displayTitle}
-      style={{
-        backgroundColor: displayColor,
-        color: isLight(displayColor) ? "#000000" : "#ffffff",
-        cursor: "default",
-      }}
-    >
-      {tag}
-    </span>
+      label={tag}
+      color={tagColor as RadixColor}
+      variant="soft"
+      mr={skipMargin ? undefined : "2"}
+      mb={skipMargin ? undefined : "1"}
+    />
   );
 }
 

@@ -1,10 +1,12 @@
+@import "../../styles/colors.scss";
+
 .markdown {
   pre {
     padding: 12px;
     overflow: auto;
     font-size: 85%;
     line-height: 1.45;
-    background-color: #f6f8fa;
+    background-color: var(--markdown-code-background);
     border-radius: 6px;
   }
   ul,
@@ -39,8 +41,11 @@
       content: "";
     }
   }
-  code[class*="language-"] {
-    color: #333;
+  mark {
+    background: $blue;
+    color: #fff;
+    padding: 3px 8px;
+    border-radius: 5px;
   }
   table {
     border-collapse: collapse;

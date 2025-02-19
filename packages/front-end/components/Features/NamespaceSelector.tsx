@@ -1,11 +1,11 @@
 import { UseFormReturn } from "react-hook-form";
-import SelectField from "../Forms/SelectField";
-import useApi from "../../hooks/useApi";
-import { NamespaceApiResponse } from "../../pages/namespaces";
-import Toggle from "../Forms/Toggle";
-import useOrgSettings from "../../hooks/useOrgSettings";
-import Field from "../Forms/Field";
-import { findGaps } from "../../services/features";
+import useApi from "@/hooks/useApi";
+import { NamespaceApiResponse } from "@/pages/namespaces";
+import useOrgSettings from "@/hooks/useOrgSettings";
+import { findGaps } from "@/services/features";
+import Field from "@/components/Forms/Field";
+import SelectField from "@/components/Forms/SelectField";
+import Checkbox from "@/components/Radix/Checkbox";
 import NamespaceUsageGraph from "./NamespaceUsageGraph";
 
 export interface Props {
@@ -38,23 +38,19 @@ export default function NamespaceSelector({
   ];
 
   return (
-    <div className="form-group">
-      <Toggle
-        id={"namepsacetoggle"}
+    <div className="my-3">
+      <Checkbox
+        size="lg"
+        label="Namespace"
+        description="Run mutually exclusive experiments"
         value={enabled}
         setValue={(v) => {
           form.setValue(`${formPrefix}namespace.enabled`, v);
         }}
-      />{" "}
-      Enable Namespace
-      <div>
-        <small className="text-muted">
-          Namespaces allow you to run mutually exclusive experiments
-        </small>
-      </div>
+      />
       {enabled && (
-        <div className="mt-2 bg-light p-3 mb-5">
-          <label>Namespace</label>
+        <div className="box p-3 mb-2">
+          <label>Use namespace</label>
           <SelectField
             value={namespace}
             onChange={(v) => {
@@ -78,7 +74,11 @@ export default function NamespaceSelector({
               );
             }}
             placeholder="Choose a namespace..."
-            options={namespaces.map((n) => ({ value: n.name, label: n.name }))}
+            options={namespaces
+              .filter((n) => {
+                return n?.status !== "inactive";
+              })
+              .map((n) => ({ value: n.name, label: n.label }))}
           />
           {namespace &&
             namespaces.filter((n) => n.name === namespace).length > 0 && (

@@ -1,7 +1,4 @@
-export interface ProjectInterface {
-  id: string;
-  organization: string;
-  name: string;
-  dateCreated: Date;
-  dateUpdated: Date;
-}
+export {
+  ProjectInterface,
+  ProjectSettings,
+} from "back-end/src/models/ProjectModel";

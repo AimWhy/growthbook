@@ -1,16 +1,16 @@
 import { ReactElement, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
-import track from "../../services/track";
-import { getApiHost } from "../../services/env";
-import WelcomeFrame from "./WelcomeFrame";
-import Field from "../Forms/Field";
 import { useRouter } from "next/router";
+import track from "@/services/track";
+import { getApiHost } from "@/services/env";
+import Field from "@/components/Forms/Field";
+import WelcomeFrame from "./WelcomeFrame";
 
 export default function Welcome({
   onSuccess,
   firstTime = false,
 }: {
-  onSuccess: (token: string) => void;
+  onSuccess: (token: string, projectId?: string) => void;
   firstTime?: boolean;
 }): ReactElement {
   const [state, setState] = useState<
@@ -68,6 +68,7 @@ export default function Welcome({
             status: number;
             token: string;
             message?: string;
+            projectId?: string;
           } = await res.json();
           if (json.status > 200) {
             throw new Error(
@@ -84,7 +85,7 @@ export default function Welcome({
           if (state === "forgot") {
             setState("forgotSuccess");
           } else {
-            onSuccess(json.token);
+            onSuccess(json.token, json.projectId);
           }
         });
 
@@ -119,7 +120,11 @@ export default function Welcome({
 
   return (
     <>
-      <WelcomeFrame leftside={leftside} loading={loading}>
+      <WelcomeFrame
+        leftside={leftside}
+        loading={loading}
+        pathName={`/${state}`}
+      >
         <form
           onSubmit={async (e) => {
             e.preventDefault();
@@ -127,12 +132,11 @@ export default function Welcome({
             setError(null);
             setLoading(true);
             try {
-              await submit();
-              setLoading(false);
+              await submit?.();
             } catch (e) {
               setError(e.message);
-              setLoading(false);
             }
+            setLoading(false);
           }}
         >
           {state === "register" && (

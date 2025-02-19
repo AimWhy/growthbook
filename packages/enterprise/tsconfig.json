@@ -7,7 +7,13 @@
     "noImplicitAny": true,
     "moduleResolution": "node",
     "sourceMap": true,
-    "outDir": "dist"
+    "outDir": "dist",
+    "typeRoots": ["node_modules/@types", "../back-end/typings"],
+    "strictNullChecks": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "rootDir": "src",
+    "resolveJsonModule": true
   },
   "include": ["src/**/*"]
 }

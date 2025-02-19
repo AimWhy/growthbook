@@ -64,12 +64,26 @@ const ClickHouseForm: FC<{
         <div className="form-group col-md-12">
           <label>Password</label>
           <input
-            type="password"
-            className="form-control"
+            type="text"
+            className="form-control password-presentation"
+            autoComplete="off"
             name="password"
             value={params.password || ""}
             onChange={onParamChange}
             placeholder={existing ? "(Keep existing)" : ""}
+          />
+        </div>
+        <div className="form-group col-md-12">
+          <label>Max Query Execution Time (seconds)</label>
+          <input
+            type="number"
+            className="form-control"
+            name="maxExecutionTime"
+            value={params.maxExecutionTime}
+            onChange={onParamChange}
+            min={0}
+            max={3600}
+            placeholder={"Default: 1800"}
           />
         </div>
       </div>

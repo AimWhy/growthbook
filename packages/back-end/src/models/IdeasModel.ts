@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { IdeaInterface } from "../../types/idea";
+import { IdeaInterface } from "back-end/types/idea";
 
 const ideaSchema = new mongoose.Schema({
   id: String,
@@ -33,4 +33,4 @@ const ideaSchema = new mongoose.Schema({
 });
 export type IdeaDocument = mongoose.Document & IdeaInterface;
 
-export const IdeaModel = mongoose.model<IdeaDocument>("Idea", ideaSchema);
+export const IdeaModel = mongoose.model<IdeaInterface>("Idea", ideaSchema);

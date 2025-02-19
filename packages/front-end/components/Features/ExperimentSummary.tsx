@@ -1,15 +1,11 @@
 import { ExperimentRule, FeatureInterface } from "back-end/types/feature";
-import ValueDisplay from "./ValueDisplay";
 import Link from "next/link";
 import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
-import { useDefinitions } from "../../services/DefinitionsContext";
-import React, { useState } from "react";
-import NewExperimentForm from "../Experiment/NewExperimentForm";
-import {
-  getExperimentDefinitionFromFeature,
-  getVariationColor,
-} from "../../services/features";
-import Modal from "../Modal";
+import { Box, Flex } from "@radix-ui/themes";
+import { getVariationColor } from "@/services/features";
+import ValidateValue from "@/components/Features/ValidateValue";
+import useOrgSettings from "@/hooks/useOrgSettings";
+import ValueDisplay from "./ValueDisplay";
 import ExperimentSplitVisual from "./ExperimentSplitVisual";
 
 const percentFormatter = new Intl.NumberFormat(undefined, {
@@ -28,71 +24,21 @@ export default function ExperimentSummary({
 }) {
   const { namespace, coverage, values, hashAttribute, trackingKey } = rule;
   const type = feature.valueType;
-
-  const { datasources, metrics } = useDefinitions();
-  const [newExpModal, setNewExpModal] = useState(false);
-  const [experimentInstructions, setExperimentInstructions] = useState(false);
-
-  const expDefinition = getExperimentDefinitionFromFeature(feature, rule);
+  const { namespaces: allNamespaces } = useOrgSettings();
 
   const hasNamespace = namespace && namespace.enabled;
   const namespaceRange = hasNamespace
     ? namespace.range[1] - namespace.range[0]
     : 1;
-  const effectiveCoverage = namespaceRange * coverage;
+  const effectiveCoverage = namespaceRange * (coverage ?? 1);
 
   return (
-    <div>
-      {newExpModal && (
-        <NewExperimentForm
-          onClose={() => setNewExpModal(false)}
-          source="feature-rule"
-          isImport={true}
-          fromFeature={true}
-          msg="We couldn't find an analysis yet for that feature. Create a new one now."
-          initialValue={expDefinition}
-        />
-      )}
-      {experimentInstructions && (
-        <Modal
-          header={"Experiments need to be set up first"}
-          open={true}
-          size="lg"
-          close={() => {
-            setExperimentInstructions(false);
-          }}
-          cta={"Set up experiments"}
-        >
-          <div className="row">
-            <div className="col-8 pl-2 mt-2">
-              In order to view the results, you first have to set up experiments
-              by connecting to your data source, and adding a metric.
-              <div className="mt-5">
-                <Link
-                  href={`/experiments/?featureExperiment=${encodeURIComponent(
-                    JSON.stringify(expDefinition)
-                  )}`}
-                >
-                  <a className="btn btn-primary">Set up experiments</a>
-                </Link>
-              </div>
-            </div>
-            <div className="col-4">
-              <img
-                className=""
-                src="/images/add-graph.svg"
-                alt=""
-                style={{ width: "100%", maxWidth: "200px" }}
-              />
-            </div>
-          </div>
-        </Modal>
-      )}
-      <div className="mb-3 row">
-        <div className="col-auto">
-          <strong>SPLIT</strong>
-        </div>
-        <div className="col-auto">
+    <Box>
+      <Flex mb="3" gap="3">
+        <Box>
+          <strong className="font-weight-semibold">SPLIT</strong>
+        </Box>
+        <Box>
           {" "}
           users by{" "}
           <span className="mr-1 border px-2 py-1 bg-light rounded">
@@ -103,17 +49,18 @@ export default function ExperimentSummary({
               {" "}
               <span>in the namespace </span>
               <span className="mr-1 border px-2 py-1 bg-light rounded">
-                {namespace.name}
+                {allNamespaces?.find((n) => n.name === namespace.name)?.label ||
+                  namespace.name}
               </span>
             </>
           )}
-        </div>
-      </div>
-      <div className="mb-3 row">
-        <div className="col-auto">
-          <strong>INCLUDE</strong>
-        </div>
-        <div className="col-auto">
+        </Box>
+      </Flex>
+      <Flex mb="3" gap="3">
+        <Box>
+          <strong className="font-weight-semibold">INCLUDE</strong>
+        </Box>
+        <Box>
           <span className="mr-1 border px-2 py-1 bg-light rounded">
             {percentFormatter.format(effectiveCoverage)}
           </span>{" "}
@@ -126,14 +73,14 @@ export default function ExperimentSummary({
               </span>{" "}
               of the namespace and{" "}
               <span className="border px-2 py-1 bg-light rounded">
-                {percentFormatter.format(coverage)}
+                {percentFormatter.format(coverage ?? 1)}
               </span>
               <span> exposure)</span>
             </>
           )}
-        </div>
-      </div>
-      <strong>SERVE</strong>
+        </Box>
+      </Flex>
+      <strong className="font-weight-semibold">SERVE</strong>
 
       <table className="table mt-1 mb-3 bg-light gbtable">
         <tbody>
@@ -150,13 +97,14 @@ export default function ExperimentSummary({
                     top: 0,
                     bottom: 0,
                     left: 0,
-                    backgroundColor: getVariationColor(j),
+                    backgroundColor: getVariationColor(j, true),
                   }}
                 />
                 {j}.
               </td>
               <td>
                 <ValueDisplay value={r.value} type={type} />
+                <ValidateValue value={r.value} feature={feature} />
               </td>
               <td>{r?.name}</td>
               <td>
@@ -190,48 +138,28 @@ export default function ExperimentSummary({
           </tr>
         </tbody>
       </table>
-      <div className="row align-items-center">
-        <div className="col-auto">
-          <strong>TRACK</strong>
-        </div>
-        <div className="col">
+      <Flex gap="3">
+        <Box>
+          <strong className="font-weight-semibold">TRACK</strong>
+        </Box>
+        <Box>
           {" "}
           the result using the key{" "}
           <span className="mr-1 border px-2 py-1 bg-light rounded">
             {trackingKey || feature.id}
           </span>{" "}
-        </div>
-        <div className="col-auto">
+        </Box>
+        <Box>
           {experiment ? (
-            <Link href={`/experiment/${experiment.id}#results`}>
-              <a className="btn btn-outline-primary">View results</a>
+            <Link
+              href={`/experiment/${experiment.id}#results`}
+              className="btn btn-outline-primary"
+            >
+              View results
             </Link>
-          ) : datasources.length > 0 && metrics.length > 0 ? (
-            <a
-              className="btn btn-outline-primary"
-              href="#"
-              onClick={(e) => {
-                e.preventDefault();
-                setNewExpModal(true);
-              }}
-              title="Create an experiment report from this rule"
-            >
-              View results
-            </a>
-          ) : (
-            <a
-              className="btn btn-outline-primary"
-              title="Setup experiments to view results"
-              onClick={(e) => {
-                e.preventDefault();
-                setExperimentInstructions(true);
-              }}
-            >
-              View results
-            </a>
-          )}
-        </div>
-      </div>
-    </div>
+          ) : null}
+        </Box>
+      </Flex>
+    </Box>
   );
 }

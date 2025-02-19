@@ -1,4 +1,4 @@
-import { FC, useState, ReactElement } from "react";
+import { ReactNode, FC, useState, ReactElement } from "react";
 import ControlledTabs from "./ControlledTabs";
 
 const Tabs: FC<{
@@ -9,6 +9,8 @@ const Tabs: FC<{
   defaultTab?: string;
   newStyle?: boolean;
   navExtra?: ReactElement;
+  children?: ReactNode;
+  showActiveCount?: boolean;
 }> = ({ children, defaultTab, ...props }) => {
   const [active, setActive] = useState<string | null>(defaultTab || null);
 

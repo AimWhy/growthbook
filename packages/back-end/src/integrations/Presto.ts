@@ -1,18 +1,25 @@
 /// <reference types="../../typings/presto-client" />
-import { decryptDataSourceParams } from "../services/datasource";
+import { Client, IPrestoClientOptions } from "presto-client";
+import { QueryStatistics } from "back-end/types/query";
+import { decryptDataSourceParams } from "back-end/src/services/datasource";
+import { PrestoConnectionParams } from "back-end/types/integrations/presto";
+import { FormatDialect } from "back-end/src/util/sql";
+import { QueryResponse } from "back-end/src/types/Integration";
 import SqlIntegration from "./SqlIntegration";
-import { PrestoConnectionParams } from "../../types/integrations/presto";
-import { Client } from "presto-client";
 
 // eslint-disable-next-line
 type Row = any;
 
 export default class Presto extends SqlIntegration {
-  params: PrestoConnectionParams;
+  params!: PrestoConnectionParams;
+  requiresSchema = false;
   setParams(encryptedParams: string) {
     this.params = decryptDataSourceParams<PrestoConnectionParams>(
       encryptedParams
     );
+  }
+  getFormatDialect(): FormatDialect {
+    return "trino";
   }
   getSensitiveParamKeys(): string[] {
     return ["password"];
@@ -20,24 +27,40 @@ export default class Presto extends SqlIntegration {
   toTimestamp(date: Date) {
     return `from_iso8601_timestamp('${date.toISOString()}')`;
   }
-  runQuery(sql: string) {
-    const client = new Client({
+  runQuery(sql: string): Promise<QueryResponse> {
+    const configOptions: IPrestoClientOptions = {
       host: this.params.host,
       port: this.params.port,
       user: "growthbook",
-      source: "nodejs-client",
-      basic_auth: {
-        user: this.params.username,
-        password: this.params.password,
-      },
+      source: this.params?.source || "growthbook",
       schema: this.params.schema,
       catalog: this.params.catalog,
+      timeout: this.params.requestTimeout ?? 0,
       checkInterval: 500,
-    });
+    };
+    if (!this.params?.authType || this.params?.authType === "basicAuth") {
+      configOptions.basic_auth = {
+        user: this.params.username || "",
+        password: this.params.password || "",
+      };
+    }
+    if (this.params?.authType === "customAuth") {
+      configOptions.custom_auth = this.params.customAuth || "";
+    }
+    if (this.params?.ssl) {
+      configOptions.ssl = {
+        ca: this.params?.caCert,
+        cert: this.params?.clientCert || "",
+        key: this.params?.clientKey,
+        secureProtocol: "SSLv23_method",
+      };
+    }
+    const client = new Client(configOptions);
 
-    return new Promise<Row[]>((resolve, reject) => {
+    return new Promise<QueryResponse>((resolve, reject) => {
       let cols: string[];
       const rows: Row[] = [];
+      const statistics: QueryStatistics = {};
 
       client.execute({
         query: sql,
@@ -50,7 +73,7 @@ export default class Presto extends SqlIntegration {
         error: (error) => {
           reject(error);
         },
-        data: (error, data) => {
+        data: (error, data, _, stats) => {
           if (error) return;
 
           data.forEach((d) => {
@@ -60,9 +83,15 @@ export default class Presto extends SqlIntegration {
             });
             rows.push(row);
           });
+
+          if (stats) {
+            statistics.executionDurationMs = Number(stats.wallTimeMillis);
+            statistics.bytesProcessed = Number(stats.processedBytes);
+            statistics.rowsProcessed = Number(stats.processedRows);
+          }
         },
         success: () => {
-          resolve(rows);
+          resolve({ rows: rows, statistics: statistics });
         },
       });
     });
@@ -78,10 +107,28 @@ export default class Presto extends SqlIntegration {
   formatDate(col: string): string {
     return `substr(to_iso8601(${col}),1,10)`;
   }
+  formatDateTimeString(col: string): string {
+    return `to_iso8601(${col})`;
+  }
   dateDiff(startCol: string, endCol: string) {
     return `date_diff('day', ${startCol}, ${endCol})`;
   }
-  useAliasInGroupBy(): boolean {
-    return false;
+  ensureFloat(col: string): string {
+    return `CAST(${col} AS DOUBLE)`;
+  }
+  hasCountDistinctHLL(): boolean {
+    return true;
+  }
+  hllAggregate(col: string): string {
+    return `APPROX_SET(${col})`;
+  }
+  hllReaggregate(col: string): string {
+    return `MERGE(${col})`;
+  }
+  hllCardinality(col: string): string {
+    return `CARDINALITY(${col})`;
+  }
+  getDefaultDatabase() {
+    return this.params.catalog || "";
   }
 }

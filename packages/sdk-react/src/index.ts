@@ -1,4 +1,12 @@
-export { GrowthBook } from "@growthbook/growthbook";
+export {
+  GrowthBook,
+  setPolyfills,
+  configureCache,
+  clearCache,
+  getPolyfills,
+  helpers,
+  prefetchPayload,
+} from "@growthbook/growthbook";
 
 export type {
   Context,
@@ -14,15 +22,58 @@ export type {
   FeatureRule,
   JSONValue,
   SubscriptionFunction,
+  Filter,
+  VariationMeta,
+  VariationRange,
+  ApplyDomChangesCallback,
+  AutoExperiment,
+  AutoExperimentChangeType,
+  AutoExperimentVariation,
+  CacheSettings,
+  DOMMutation,
+  FeatureApiResponse,
+  FeatureDefinitions,
+  Helpers,
+  InitOptions,
+  InitResponse,
+  LoadFeaturesOptions,
+  LocalStorageCompat,
+  NavigateCallback,
+  ParentConditionInterface,
+  Polyfills,
+  PrefetchOptions,
+  RefreshFeaturesOptions,
+  RenderFunction,
+  StickyAssignments,
+  StickyAssignmentsDocument,
+  StickyAttributeKey,
+  StickyExperimentKey,
+  TrackingCallback,
+  TrackingData,
+  UrlTarget,
+  UrlTargetType,
+  WidenPrimitives,
+  GrowthBookPayload,
+  InitSyncOptions,
+} from "@growthbook/growthbook";
+
+export {
+  StickyBucketService,
+  LocalStorageStickyBucketService,
+  BrowserCookieStickyBucketService,
+  ExpressCookieStickyBucketService,
+  RedisStickyBucketService,
 } from "@growthbook/growthbook";
 
 export type {
   WithRunExperimentProps,
   GrowthBookContextValue,
+  GrowthBookSSRData,
 } from "./GrowthBookReact";
 
 export {
   FeatureString,
+  FeaturesReady,
   GrowthBookContext,
   GrowthBookProvider,
   IfFeatureEnabled,
@@ -30,4 +81,8 @@ export {
   useFeature,
   useGrowthBook,
   withRunExperiment,
+  getGrowthBookSSRData,
+  useGrowthBookSSR,
+  useFeatureIsOn,
+  useFeatureValue,
 } from "./GrowthBookReact";

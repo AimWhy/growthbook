@@ -1,11 +1,11 @@
 import Link from "next/link";
 import React from "react";
-import { ago, datetime } from "../../services/dates";
 import {
   ExperimentInterfaceStringDates,
   ExperimentStatus,
 } from "back-end/types/experiment";
-import { phaseSummary } from "../../services/utils";
+import { ago, datetime, getValidDate } from "shared/dates";
+import { phaseSummary } from "@/services/utils";
 
 export default function ExperimentList({
   num,
@@ -32,42 +32,50 @@ export default function ExperimentList({
           endDate;
 
         test.phases.forEach((p) => {
-          if (p.phase === "main" || p.phase === "ramp") {
-            if (!startDate || p.dateStarted < startDate) {
-              startDate = p.dateStarted;
-            }
-            if (!endDate || p.dateEnded > endDate) endDate = p.dateEnded;
+          if (
+            !startDate ||
+            getValidDate(p?.dateStarted ?? "") < getValidDate(startDate)
+          ) {
+            startDate = p.dateStarted ?? "";
           }
+          if (
+            !endDate ||
+            getValidDate(p?.dateEnded ?? "") > getValidDate(endDate)
+          )
+            endDate = p.dateEnded;
         });
         const currentPhase = test.phases[test.phases.length - 1];
         return (
           <li key={i} className="w-100 hover-highlight">
             <div key={test.id} className="d-flex">
-              <Link href={`/experiment/${test.id}`}>
-                <a className="w-100 no-link-color">
-                  <div className="d-flex w-100">
-                    <div className="mb-1">
-                      <strong>{test.name}</strong>{" "}
-                    </div>
-                    <div style={{ flex: 1 }} />
-                    <div className="">
-                      <span className="purple-phase">
-                        {phaseSummary(currentPhase)}
-                      </span>
-                    </div>
+              <Link
+                href={`/experiment/${test.id}`}
+                className="w-100 no-link-color"
+              >
+                <div className="d-flex w-100">
+                  <div className="mb-1 mr-1">
+                    <strong>{test.name}</strong>
                   </div>
-                  <div className="d-flex">
-                    <div className="text-muted" title={datetime(startDate)}>
-                      {ago(startDate)}
-                    </div>
-                    <div style={{ flex: 1 }} />
-                    <div>
-                      {" "}
-                      {test.variations.length} variations, {currentPhase?.phase}{" "}
-                      phase
-                    </div>
+                  <div style={{ flex: 1 }} />
+                  <div className="">
+                    <span className="purple-phase">
+                      {phaseSummary(
+                        currentPhase,
+                        test.type === "multi-armed-bandit"
+                      )}
+                    </span>
                   </div>
-                </a>
+                </div>
+                <div className="d-flex">
+                  <div className="text-muted" title={datetime(startDate)}>
+                    {ago(startDate)}
+                  </div>
+                  <div style={{ flex: 1 }} />
+                  <div>
+                    {" "}
+                    {currentPhase?.name} ({test.variations.length} variations)
+                  </div>
+                </div>
               </Link>
             </div>
           </li>

@@ -1,8 +1,8 @@
 import { ProjectInterface } from "back-end/types/project";
 import { useForm } from "react-hook-form";
-import { useAuth } from "../../services/auth";
-import Modal from "../Modal";
-import Field from "../Forms/Field";
+import { useAuth } from "@/services/auth";
+import Modal from "@/components/Modal";
+import Field from "@/components/Forms/Field";
 
 export default function ProjectModal({
   existing,
@@ -16,12 +16,14 @@ export default function ProjectModal({
   const form = useForm<Partial<ProjectInterface>>({
     defaultValues: {
       name: existing.name || "",
+      description: existing.description || "",
     },
   });
   const { apiCall } = useAuth();
 
   return (
     <Modal
+      trackingEventModalType=""
       open={true}
       close={close}
       header={existing.id ? "Edit Project" : "Create Project"}
@@ -33,7 +35,15 @@ export default function ProjectModal({
         await onSuccess();
       })}
     >
-      <Field name="Name" maxLength={30} required {...form.register("name")} />
+      <Field label="Name" maxLength={30} required {...form.register("name")} />
+      <Field
+        label="Description"
+        maxLength={100}
+        minRows={3}
+        maxRows={8}
+        textarea={true}
+        {...form.register("description")}
+      />
     </Modal>
   );
 }

@@ -1,39 +1,54 @@
 import React from "react";
-import useApi from "../../hooks/useApi";
-import LoadingOverlay from "../../components/LoadingOverlay";
-import { AuditInterface } from "back-end/types/audit";
 import Link from "next/link";
-import ActivityList from "../ActivityList";
+import { useGrowthBook } from "@growthbook/growthbook-react";
+import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
+import { AppFeatures } from "@/types/app-features";
+import { useUser } from "@/services/UserContext";
+import ActivityList from "@/components/ActivityList";
+import ExperimentList from "@/components/Experiment/ExperimentList";
+import ExperimentGraph from "@/components/Experiment/ExperimentGraph";
+import PremiumTooltip from "@/components/Marketing/PremiumTooltip";
 import styles from "./Dashboard.module.scss";
-import ExperimentList from "../Experiment/ExperimentList";
-import ExperimentGraph from "../Experiment/ExperimentGraph";
-import useUser from "../../hooks/useUser";
 import IdeasFeed from "./IdeasFeed";
 import NorthStar from "./NorthStar";
-import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
+import ExperimentImpact from "./ExperimentImpact";
 
 export interface Props {
   experiments: ExperimentInterfaceStringDates[];
 }
 
 export default function Dashboard({ experiments }: Props) {
-  const { data, error } = useApi<{
-    events: AuditInterface[];
-  }>("/activity");
-
-  const { name } = useUser();
-
-  if (error) {
-    return <div className="alert alert-danger">{error.message}</div>;
-  }
-  if (!data) {
-    return <LoadingOverlay />;
-  }
+  const { name, hasCommercialFeature } = useUser();
+  const growthbook = useGrowthBook<AppFeatures>();
 
   const nameMap = new Map<string, string>();
   experiments.forEach((e) => {
     nameMap.set(e.id, e.name);
   });
+
+  const experimentImpactWidget = (
+    <div className="col-xl-13 mb-4">
+      <div className="list-group activity-box overflow-auto pt-1">
+        {hasCommercialFeature("experiment-impact") ? (
+          <ExperimentImpact experiments={experiments} />
+        ) : (
+          <div className="pt-2">
+            <div className="row align-items-start mb-4">
+              <div className="col-lg-auto">
+                <h3 className="mt-2">Experiment Impact</h3>
+              </div>
+            </div>
+
+            <PremiumTooltip commercialFeature="experiment-impact">
+              Experiment Impact is available to Enterprise customers
+            </PremiumTooltip>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const showImpactNearTop = growthbook.isOn("show-impact-near-top");
 
   return (
     <>
@@ -41,18 +56,19 @@ export default function Dashboard({ experiments }: Props) {
         <h1>Hello {name}</h1>
         <div className="row">
           <div className="col-md-12">
-            <NorthStar />
+            <NorthStar experiments={experiments} />
           </div>
         </div>
+
+        {showImpactNearTop ? experimentImpactWidget : null}
         <div className="row">
           <div className="col-lg-12 col-md-12 col-xl-8 mb-3">
-            <div className="list-group activity-box fixed-height overflow-auto">
-              <h4 className="mb-3">Experiments by month</h4>
+            <div className="list-group activity-box">
               <ExperimentGraph
                 resolution={"month"}
                 num={12}
-                status={"all"}
                 height={220}
+                initialShowBy={"all"}
               />
             </div>
           </div>
@@ -60,8 +76,8 @@ export default function Dashboard({ experiments }: Props) {
             <div className="list-group activity-box fixed-height overflow-auto">
               <h4 className="">
                 Recent Activity{" "}
-                <Link href="/activity">
-                  <a className="float-right h6">See all</a>
+                <Link href="/activity" className="float-right h6">
+                  See all
                 </Link>
               </h4>
               <ActivityList num={3} />
@@ -71,8 +87,8 @@ export default function Dashboard({ experiments }: Props) {
             <div className="list-group activity-box fixed-height overflow-auto">
               <h4>
                 Running Experiments
-                <Link href={`/experiments`}>
-                  <a className="float-right h6">See all</a>
+                <Link href={`/experiments`} className="float-right h6">
+                  See all
                 </Link>
               </h4>
               <ExperimentList
@@ -86,14 +102,15 @@ export default function Dashboard({ experiments }: Props) {
             <div className="list-group activity-box fixed-height overflow-auto ">
               <h4>
                 Recent Ideas{" "}
-                <Link href={`/ideas`}>
-                  <a className="float-right h6">See all</a>
+                <Link href={`/ideas`} className="float-right h6">
+                  See all
                 </Link>
               </h4>
               <IdeasFeed num={5} />
             </div>
           </div>
         </div>
+        {!showImpactNearTop ? experimentImpactWidget : null}
       </div>
     </>
   );

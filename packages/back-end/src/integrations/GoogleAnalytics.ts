@@ -1,26 +1,35 @@
+import { analyticsreporting_v4, google } from "googleapis";
+import cloneDeep from "lodash/cloneDeep";
+import { ReqContext } from "back-end/types/organization";
 import {
-  SourceIntegrationConstructor,
   SourceIntegrationInterface,
   MetricValueParams,
   ExperimentMetricQueryResponse,
-  PastExperimentResponse,
   MetricValueQueryResponse,
   ExperimentQueryResponses,
-} from "../types/Integration";
-import { GoogleAnalyticsParams } from "../../types/integrations/googleanalytics";
-import { decryptDataSourceParams } from "../services/datasource";
-import { analyticsreporting_v4, google } from "googleapis";
+  MetricValueQueryResponseRows,
+  PastExperimentQueryResponse,
+  ExperimentUnitsQueryResponse,
+  ExperimentAggregateUnitsQueryResponse,
+  DimensionSlicesQueryResponse,
+  MetricAnalysisQueryResponse,
+  DropTableQueryResponse,
+} from "back-end/src/types/Integration";
+import { GoogleAnalyticsParams } from "back-end/types/integrations/googleanalytics";
+import { decryptDataSourceParams } from "back-end/src/services/datasource";
 import {
   GOOGLE_OAUTH_CLIENT_ID,
   GOOGLE_OAUTH_CLIENT_SECRET,
   APP_ORIGIN,
-} from "../util/secrets";
+} from "back-end/src/util/secrets";
+import { sumSquaresFromStats } from "back-end/src/util/stats";
 import {
+  DataSourceInterface,
   DataSourceProperties,
-  DataSourceSettings,
-} from "../../types/datasource";
-import { ExperimentInterface, ExperimentPhase } from "../../types/experiment";
-import { MetricInterface } from "../../types/metric";
+} from "back-end/types/datasource";
+import { MetricInterface } from "back-end/types/metric";
+import { ExperimentSnapshotSettings } from "back-end/types/experiment-snapshot";
+import { applyMetricOverrides } from "back-end/src/util/integration";
 
 export function getOauth2Client() {
   return new google.auth.OAuth2(
@@ -46,29 +55,66 @@ function convertDate(rawDate: string): string {
   return "";
 }
 
-const GoogleAnalytics: SourceIntegrationConstructor = class
-  implements SourceIntegrationInterface {
+export default class GoogleAnalytics implements SourceIntegrationInterface {
   params: GoogleAnalyticsParams;
-  datasource: string;
-  organization: string;
-  settings: DataSourceSettings;
+  context: ReqContext;
+  datasource: DataSourceInterface;
+  decryptionError: boolean;
 
-  constructor(encryptedParams: string) {
-    this.params = decryptDataSourceParams<GoogleAnalyticsParams>(
-      encryptedParams
-    );
-    this.settings = {};
+  constructor(context: ReqContext, datasource: DataSourceInterface) {
+    this.context = context;
+    this.datasource = datasource;
+
+    this.decryptionError = false;
+    try {
+      this.params = decryptDataSourceParams<GoogleAnalyticsParams>(
+        datasource.params
+      );
+    } catch (e) {
+      this.params = { customDimension: "", refreshToken: "", viewId: "" };
+      this.decryptionError = true;
+    }
+  }
+  getMetricAnalysisQuery(): string {
+    throw new Error("Method not implemented.");
+  }
+  runMetricAnalysisQuery(): Promise<MetricAnalysisQueryResponse> {
+    throw new Error("Method not implemented.");
+  }
+  getDropUnitsTableQuery(): string {
+    throw new Error("Method not implemented.");
+  }
+  runDropTableQuery(): Promise<DropTableQueryResponse> {
+    throw new Error("Method not implemented.");
   }
   getExperimentMetricQuery(): string {
+    throw new Error("Method not implemented.");
+  }
+  getExperimentAggregateUnitsQuery(): string {
+    throw new Error("Method not implemented.");
+  }
+  runExperimentAggregateUnitsQuery(): Promise<ExperimentAggregateUnitsQueryResponse> {
     throw new Error("Method not implemented.");
   }
   runExperimentMetricQuery(): Promise<ExperimentMetricQueryResponse> {
     throw new Error("Method not implemented.");
   }
+  getExperimentUnitsTableQuery(): string {
+    throw new Error("Method not implemented.");
+  }
+  runExperimentUnitsQuery(): Promise<ExperimentUnitsQueryResponse> {
+    throw new Error("Method not implemented.");
+  }
   getPastExperimentQuery(): string {
     throw new Error("Method not implemented.");
   }
-  runPastExperimentQuery(): Promise<PastExperimentResponse> {
+  runPastExperimentQuery(): Promise<PastExperimentQueryResponse> {
+    throw new Error("Method not implemented.");
+  }
+  getDimensionSlicesQuery(): string {
+    throw new Error("Method not implemented.");
+  }
+  async runDimensionSlicesQuery(): Promise<DimensionSlicesQueryResponse> {
     throw new Error("Method not implemented.");
   }
   getMetricValueQuery(params: MetricValueParams): string {
@@ -102,7 +148,7 @@ const GoogleAnalytics: SourceIntegrationConstructor = class
   }
   async runMetricValueQuery(query: string): Promise<MetricValueQueryResponse> {
     const { rows, metrics } = await this.runQuery(query);
-    const dates: MetricValueQueryResponse = [];
+    const dates: MetricValueQueryResponseRows = [];
     if (rows) {
       const metric = metrics[0];
       const isTotal =
@@ -143,16 +189,24 @@ const GoogleAnalytics: SourceIntegrationConstructor = class
           mean = value;
         }
 
+        // Rebuild sum and sums of squares to match SQL integration
+        // TODO: refactor above queries to just build these values directly
+        const sum = count * mean;
+        const sum_squares = sumSquaresFromStats(
+          sum,
+          Math.pow(stddev, 2),
+          count
+        );
         dates.push({
           date,
           count,
-          mean,
-          stddev,
+          main_sum: sum,
+          main_sum_squares: sum_squares,
         });
       });
     }
 
-    return dates;
+    return { rows: dates };
   }
 
   async runQuery(query: string) {
@@ -197,10 +251,14 @@ const GoogleAnalytics: SourceIntegrationConstructor = class
   }
 
   getExperimentResultsQuery(
-    experiment: ExperimentInterface,
-    phase: ExperimentPhase,
-    metrics: MetricInterface[]
+    snapshotSettings: ExperimentSnapshotSettings,
+    metricDocs: MetricInterface[]
   ): string {
+    const metrics = metricDocs.map((m) => {
+      const mCopy = cloneDeep<MetricInterface>(m);
+      applyMetricOverrides(mCopy, snapshotSettings);
+      return mCopy;
+    });
     const metricExpressions = metrics.map((m) => ({
       expression: m.table,
     }));
@@ -209,8 +267,8 @@ const GoogleAnalytics: SourceIntegrationConstructor = class
       viewId: this.params.viewId,
       dateRanges: [
         {
-          startDate: phase.dateStarted.toISOString().substr(0, 10),
-          endDate: (phase.dateEnded || new Date()).toISOString().substr(0, 10),
+          startDate: snapshotSettings.startDate.toISOString().substr(0, 10),
+          endDate: snapshotSettings.endDate.toISOString().substr(0, 10),
         },
       ],
       metrics: [
@@ -230,7 +288,9 @@ const GoogleAnalytics: SourceIntegrationConstructor = class
             {
               dimensionName: `ga:dimension${this.params.customDimension}`,
               operator: "BEGINS_WITH",
-              expressions: [experiment.trackingKey + this.getDelimiter()],
+              expressions: [
+                snapshotSettings.experimentId + this.getDelimiter(),
+              ],
             },
           ],
         },
@@ -245,11 +305,10 @@ const GoogleAnalytics: SourceIntegrationConstructor = class
   }
 
   async getExperimentResults(
-    experiment: ExperimentInterface,
-    phase: ExperimentPhase,
+    snapshotSettings: ExperimentSnapshotSettings,
     metrics: MetricInterface[]
   ): Promise<ExperimentQueryResponses> {
-    const query = this.getExperimentResultsQuery(experiment, phase, metrics);
+    const query = this.getExperimentResultsQuery(snapshotSettings, metrics);
 
     const result = await google.analyticsreporting("v4").reports.batchGet({
       auth: this.getAuth(),
@@ -278,29 +337,34 @@ const GoogleAnalytics: SourceIntegrationConstructor = class
             value = users * value;
           }
 
-          const mean =
-            metric.type === "binomial" ? 1 : Math.round(value) / users;
-          const count = metric.type === "binomial" ? value : users;
+          const mean = Math.round(value) / users;
+          const sum = value;
+          const count = users;
 
+          // GA doesn't expose standard deviations, so we have to guess
           // If the metric is duration, we can assume an exponential distribution where the stddev equals the mean
           // If the metric is count, we can assume a poisson distribution where the variance equals the mean
-          const stddev =
+          // For binomial metrics, we can use the Normal approximation for a bernouli random variable
+          const variance =
             metric.type === "duration"
-              ? mean
+              ? Math.pow(mean, 2)
               : metric.type === "count"
-              ? Math.sqrt(mean)
+              ? mean
+              : metric.type === "binomial"
+              ? mean * (1 - mean)
               : 0;
 
+          // because of above guessing about stddev, we have to backout the implied sum_squares
+          const sum_squares = sumSquaresFromStats(mean, variance, count);
           return {
             metric: metric.id,
-            users,
-            count,
-            mean,
-            stddev,
+            metric_type: metric.type,
+            count: count,
+            main_sum: sum,
+            main_sum_squares: sum_squares,
           };
         }),
       };
     });
   }
-};
-export default GoogleAnalytics;
+}

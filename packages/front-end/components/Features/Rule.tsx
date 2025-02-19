@@ -1,35 +1,99 @@
 import { FeatureInterface, FeatureRule } from "back-end/types/feature";
-import { useAuth } from "../../services/auth";
-import Button from "../Button";
-import DeleteButton from "../DeleteButton";
-import MoreMenu from "../Dropdown/MoreMenu";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import React, { forwardRef, ReactElement } from "react";
+import Link from "next/link";
+import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
+import { filterEnvironmentsByFeature } from "shared/util";
+import { Box, Card, Flex, Heading } from "@radix-ui/themes";
+import { RiAlertLine, RiDraggable } from "react-icons/ri";
+import { RxCircleBackslash } from "react-icons/rx";
+import { PiArrowBendRightDown } from "react-icons/pi";
+import { format as formatTimeZone } from "date-fns-tz";
+import { useAuth } from "@/services/auth";
+import track from "@/services/track";
+import { getRules, isRuleInactive, useEnvironments } from "@/services/features";
+import { getUpcomingScheduleRule } from "@/services/scheduleRules";
+import Tooltip from "@/components/Tooltip/Tooltip";
+import Button from "@/components/Button";
+import DeleteButton from "@/components/DeleteButton/DeleteButton";
+import MoreMenu from "@/components/Dropdown/MoreMenu";
+import usePermissionsUtil from "@/hooks/usePermissionsUtils";
+import HelperText from "@/components/Radix/HelperText";
+import Badge from "@/components/Radix/Badge";
+import ExperimentStatusIndicator from "@/components/Experiment/TabbedPage/ExperimentStatusIndicator";
+import Callout from "@/components/Radix/Callout";
 import ConditionDisplay from "./ConditionDisplay";
 import ForceSummary from "./ForceSummary";
 import RolloutSummary from "./RolloutSummary";
-import { useSortable } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import React, { forwardRef } from "react";
-import { FaArrowsAlt } from "react-icons/fa";
 import ExperimentSummary from "./ExperimentSummary";
-import track from "../../services/track";
-import { ExperimentInterfaceStringDates } from "back-end/types/experiment";
-import { getRules } from "../../services/features";
-import { useEnvironments } from "../../services/features";
+import FeatureUsageGraph, { useFeatureUsage } from "./FeatureUsageGraph";
+import ExperimentRefSummary, {
+  isExperimentRefRuleSkipped,
+} from "./ExperimentRefSummary";
 
 interface SortableProps {
   i: number;
   rule: FeatureRule;
   feature: FeatureInterface;
   environment: string;
-  experiments: Record<string, ExperimentInterfaceStringDates>;
   mutate: () => void;
-  setRuleModal: ({ environment: string, i: number }) => void;
+  setRuleModal: (args: {
+    environment: string;
+    i: number;
+    defaultType?: string;
+    duplicate?: boolean;
+  }) => void;
+  setCopyRuleModal: (args: {
+    environment: string;
+    rules: FeatureRule[];
+  }) => void;
+  unreachable?: boolean;
+  version: number;
+  setVersion: (version: number) => void;
+  locked: boolean;
+  experimentsMap: Map<string, ExperimentInterfaceStringDates>;
+  hideInactive?: boolean;
+  isDraft: boolean;
 }
 
 type RuleProps = SortableProps &
   React.HTMLAttributes<HTMLDivElement> & {
     handle?: React.HTMLAttributes<HTMLDivElement>;
   };
+
+function isRuleSkipped({
+  rule,
+  linkedExperiment,
+  isDraft,
+}: {
+  rule: FeatureRule;
+  isDraft: boolean;
+  linkedExperiment?: ExperimentInterfaceStringDates;
+}): boolean {
+  // Not live yet
+  const upcomingScheduleRule = getUpcomingScheduleRule(rule);
+  if (upcomingScheduleRule?.enabled && rule?.scheduleRules?.length) return true;
+
+  // Schedule completed and disabled
+  if (
+    !upcomingScheduleRule &&
+    rule?.scheduleRules?.length &&
+    rule.scheduleRules.at(-1)?.timestamp !== null
+  ) {
+    return true;
+  }
+
+  // If the experiment is skipped
+  if (
+    linkedExperiment &&
+    isExperimentRefRuleSkipped(linkedExperiment, isDraft)
+  ) {
+    return true;
+  }
+
+  return false;
+}
 
 // eslint-disable-next-line
 export const Rule = forwardRef<HTMLDivElement, RuleProps>(
@@ -40,209 +104,302 @@ export const Rule = forwardRef<HTMLDivElement, RuleProps>(
       feature,
       environment,
       setRuleModal,
+      setCopyRuleModal,
       mutate,
       handle,
-      experiments,
+      unreachable,
+      version,
+      setVersion,
+      locked,
+      experimentsMap,
+      hideInactive,
+      isDraft,
       ...props
     },
     ref
   ) => {
     const { apiCall } = useAuth();
-    const type = feature.valueType;
-    const title =
+
+    const allEnvironments = useEnvironments();
+    const environments = filterEnvironmentsByFeature(allEnvironments, feature);
+    const { featureUsage } = useFeatureUsage();
+
+    let title: string | ReactElement =
       rule.description ||
       rule.type[0].toUpperCase() + rule.type.slice(1) + " Rule";
+    if (rule.type === "experiment") {
+      title = (
+        <div className="d-flex align-items-center">
+          {title}
+          <Tooltip
+            body={`This is a legacy "inline experiment" feature rule. New experiment rules must be created as references to experiments.`}
+          >
+            <HelperText status="info" size="sm" ml="3">
+              legacy
+            </HelperText>
+          </Tooltip>
+        </div>
+      );
+    }
+
+    const linkedExperiment =
+      rule.type === "experiment-ref" && experimentsMap.get(rule.experimentId);
+
     const rules = getRules(feature, environment);
-    const environments = useEnvironments();
+    const permissionsUtil = usePermissionsUtil();
+
+    const canEdit =
+      !locked &&
+      permissionsUtil.canViewFeatureModal(feature.project) &&
+      permissionsUtil.canManageFeatureDrafts(feature);
+
+    const isInactive = isRuleInactive(rule, experimentsMap);
+
+    const hasCondition =
+      (rule.condition && rule.condition !== "{}") ||
+      !!rule.savedGroups?.length ||
+      !!rule.prerequisites?.length;
+
+    const info = getRuleMetaInfo({
+      rule,
+      experimentsMap,
+      isDraft,
+      unreachable,
+    });
+
+    if (hideInactive && isInactive) {
+      return null;
+    }
 
     return (
-      <div
-        className={`p-3 ${
-          i < rules.length - 1 ? "border-bottom" : ""
-        } bg-white`}
-        {...props}
-        ref={ref}
-      >
-        <div className="d-flex mb-2 align-items-center">
-          <div>
+      <Box {...props} ref={ref}>
+        <Box mt="3">
+          <Card>
             <div
-              className="text-light border rounded-circle"
               style={{
-                width: 28,
-                height: 28,
-                lineHeight: "28px",
-                textAlign: "center",
-                background: "#7C45EA",
-                fontWeight: "bold",
-                opacity: !rule.enabled ? 0.5 : 1,
+                position: "absolute",
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: "4px",
+                backgroundColor:
+                  info.sideColor === "disabled"
+                    ? "var(--gray-5)"
+                    : info.sideColor === "unreachable"
+                    ? "var(--orange-7)"
+                    : info.sideColor === "skipped"
+                    ? "var(--amber-7)"
+                    : "var(--green-9)",
               }}
-            >
-              {i + 1}
-            </div>
-          </div>
-          <div
-            style={{ flex: 1, opacity: !rule.enabled ? 0.5 : 1 }}
-            className="mx-2"
-          >
-            {title}
-          </div>
-          {!rule.enabled && (
-            <div className="mr-3">
-              <div className="bg-secondary text-light border px-2 rounded">
-                DISABLED
-              </div>
-            </div>
-          )}
-          {rules.length > 1 && (
-            <div
-              {...handle}
-              title="Drag and drop to re-order rules"
-              className="mr-2"
-            >
-              <FaArrowsAlt />
-            </div>
-          )}
-          <div>
-            <MoreMenu id={"edit_rule_" + rule.id}>
-              <a
-                href="#"
-                className="dropdown-item"
-                onClick={(e) => {
-                  e.preventDefault();
-                  setRuleModal({ environment, i });
-                }}
-              >
-                Edit
-              </a>
-              <Button
-                color=""
-                className="dropdown-item"
-                onClick={async () => {
-                  track(
-                    rule.enabled
-                      ? "Disable Feature Rule"
-                      : "Enable Feature Rule",
-                    {
-                      ruleIndex: i,
-                      environment,
-                      type: rule.type,
-                    }
-                  );
-                  await apiCall(`/feature/${feature.id}/rule`, {
-                    method: "PUT",
-                    body: JSON.stringify({
-                      environment,
-                      rule: {
-                        ...rule,
-                        enabled: !rule.enabled,
-                      },
-                      i,
-                    }),
-                  });
-                  mutate();
-                }}
-              >
-                {rule.enabled ? "Disable" : "Enable"}
-              </Button>
-              {environments
-                .filter((e) => e.id !== environment)
-                .map((en) => (
-                  <Button
-                    key={en.id}
-                    color=""
-                    className="dropdown-item"
-                    onClick={async () => {
-                      await apiCall(`/feature/${feature.id}/rule`, {
-                        method: "POST",
-                        body: JSON.stringify({
-                          environment: en.id,
-                          rule: { ...rule, id: "" },
-                        }),
-                      });
-                      track("Clone Feature Rule", {
-                        ruleIndex: i,
-                        environment,
-                        type: rule.type,
-                      });
-                      mutate();
-                    }}
+            ></div>
+            <Flex align="start" justify="between" gap="3" p="1" px="2">
+              <Box>
+                {rules.length > 1 && canEdit && (
+                  <div
+                    {...handle}
+                    title="Drag and drop to re-order rules"
+                    style={{ cursor: "grab" }}
                   >
-                    Copy to {en.id}
-                  </Button>
-                ))}
-              <DeleteButton
-                className="dropdown-item"
-                displayName="Rule"
-                useIcon={false}
-                text="Delete"
-                onClick={async () => {
-                  track("Delete Feature Rule", {
-                    ruleIndex: i,
-                    environment,
-                    type: rule.type,
-                  });
-                  await apiCall(`/feature/${feature.id}/rule`, {
-                    method: "DELETE",
-                    body: JSON.stringify({
-                      environment,
-                      i,
-                    }),
-                  });
-                  mutate();
-                }}
-              />
-            </MoreMenu>
-          </div>
-        </div>
-        <div className="d-flex">
-          <div style={{ flex: 1 }} className="pt-1 position-relative">
-            {!rule.enabled && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  zIndex: 99,
-                  background: "rgba(255,255,255,.7)",
-                  display: "flex",
-                  flexDirection: "column",
-                  fontSize: 25,
-                }}
-              ></div>
-            )}
-            {rule.condition && rule.condition !== "{}" && (
-              <div className="row mb-3 align-items-top">
-                <div className="col-auto">
-                  <strong>IF</strong>
-                </div>
-                <div className="col">
-                  <ConditionDisplay condition={rule.condition} />
-                </div>
-              </div>
-            )}
-            {rule.type === "force" && (
-              <ForceSummary value={rule.value} type={type} />
-            )}
-            {rule.type === "rollout" && (
-              <RolloutSummary
-                value={rule.value ?? ""}
-                coverage={rule.coverage ?? 1}
-                type={type}
-                hashAttribute={rule.hashAttribute || ""}
-              />
-            )}
-            {rule.type === "experiment" && (
-              <ExperimentSummary
-                feature={feature}
-                experiment={experiments[rule.trackingKey || feature.id]}
-                rule={rule}
-              />
-            )}
-          </div>
-        </div>
-      </div>
+                    <RiDraggable />
+                  </div>
+                )}
+              </Box>
+              <Box>
+                <Badge label={<>{i + 1}</>} radius="full" color="gray" />
+              </Box>
+              <Box flexGrow="1" flexShrink="5" overflowX="auto">
+                <Flex align="center" justify="between" mb="3">
+                  <Heading as="h4" size="3" weight="medium" mb="0">
+                    {linkedExperiment ? (
+                      <Flex gap="3" align="center">
+                        {linkedExperiment.type === "multi-armed-bandit"
+                          ? "Bandit"
+                          : "Experiment"}
+                        :{" "}
+                        <Link
+                          href={`/${
+                            linkedExperiment.type === "multi-armed-bandit"
+                              ? "bandit"
+                              : "experiment"
+                          }/${linkedExperiment.id}`}
+                        >
+                          {linkedExperiment.name}
+                        </Link>
+                        <ExperimentStatusIndicator
+                          experimentData={linkedExperiment}
+                        />
+                      </Flex>
+                    ) : (
+                      title
+                    )}
+                  </Heading>
+                  {info.pill}
+                </Flex>
+                <Box>{info.callout}</Box>
+                <Box style={{ opacity: isInactive ? 0.6 : 1 }} mt="3">
+                  {hasCondition && rule.type !== "experiment-ref" && (
+                    <Flex align="center" justify="start" gap="3">
+                      <Box pb="3">
+                        <strong className="font-weight-semibold">IF</strong>
+                      </Box>
+                      <Box
+                        width="100%"
+                        flexShrink="4"
+                        flexGrow="1"
+                        overflowX="auto"
+                        pb="3"
+                      >
+                        <ConditionDisplay
+                          condition={rule.condition || ""}
+                          savedGroups={rule.savedGroups}
+                          prerequisites={rule.prerequisites}
+                        />
+                      </Box>
+                    </Flex>
+                  )}
+                  {rule.type === "force" && (
+                    <ForceSummary value={rule.value} feature={feature} />
+                  )}
+                  {rule.type === "rollout" && (
+                    <RolloutSummary
+                      value={rule.value ?? ""}
+                      coverage={rule.coverage ?? 1}
+                      feature={feature}
+                      hashAttribute={rule.hashAttribute || ""}
+                    />
+                  )}
+                  {rule.type === "experiment" && (
+                    <ExperimentSummary
+                      feature={feature}
+                      experiment={Array.from(experimentsMap.values()).find(
+                        (exp) =>
+                          exp.trackingKey === (rule.trackingKey || feature.id)
+                      )}
+                      rule={rule}
+                    />
+                  )}
+                  {rule.type === "experiment-ref" && (
+                    <ExperimentRefSummary
+                      feature={feature}
+                      experiment={experimentsMap.get(rule.experimentId)}
+                      rule={rule}
+                      isDraft={isDraft}
+                    />
+                  )}
+                </Box>
+              </Box>
+              <Flex>
+                {featureUsage && (
+                  <div className="ml-auto">
+                    <FeatureUsageGraph
+                      data={
+                        featureUsage?.environments?.[environment]?.rules?.[
+                          rule.id
+                        ]
+                      }
+                    />
+                  </div>
+                )}
+                {canEdit && (
+                  <MoreMenu useRadix={true} size={14}>
+                    <a
+                      href="#"
+                      className="dropdown-item"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setRuleModal({ environment, i });
+                      }}
+                    >
+                      Edit
+                    </a>
+                    <Button
+                      color=""
+                      className="dropdown-item"
+                      onClick={async () => {
+                        track(
+                          rule.enabled
+                            ? "Disable Feature Rule"
+                            : "Enable Feature Rule",
+                          {
+                            ruleIndex: i,
+                            environment,
+                            type: rule.type,
+                          }
+                        );
+                        const res = await apiCall<{ version: number }>(
+                          `/feature/${feature.id}/${version}/rule`,
+                          {
+                            method: "PUT",
+                            body: JSON.stringify({
+                              environment,
+                              rule: {
+                                ...rule,
+                                enabled: !rule.enabled,
+                              },
+                              i,
+                            }),
+                          }
+                        );
+                        await mutate();
+                        res.version && setVersion(res.version);
+                      }}
+                    >
+                      {rule.enabled ? "Disable" : "Enable"}
+                    </Button>
+                    {environments.length > 1 && (
+                      <Button
+                        color=""
+                        className="dropdown-item"
+                        onClick={() => {
+                          setCopyRuleModal({ environment, rules: [rule] });
+                        }}
+                      >
+                        Copy rule to environment(s)
+                      </Button>
+                    )}
+                    {rule.type !== "experiment-ref" && (
+                      <Button
+                        color=""
+                        className="dropdown-item"
+                        onClick={() => {
+                          setRuleModal({ environment, i, duplicate: true });
+                        }}
+                      >
+                        Duplicate rule
+                      </Button>
+                    )}
+                    <DeleteButton
+                      className="dropdown-item"
+                      displayName="Rule"
+                      useIcon={false}
+                      text="Delete"
+                      onClick={async () => {
+                        track("Delete Feature Rule", {
+                          ruleIndex: i,
+                          environment,
+                          type: rule.type,
+                        });
+                        const res = await apiCall<{ version: number }>(
+                          `/feature/${feature.id}/${version}/rule`,
+                          {
+                            method: "DELETE",
+                            body: JSON.stringify({
+                              environment,
+                              i,
+                            }),
+                          }
+                        );
+                        await mutate();
+                        res.version && setVersion(res.version);
+                      }}
+                    />
+                  </MoreMenu>
+                )}
+              </Flex>
+            </Flex>
+          </Card>
+        </Box>
+      </Box>
     );
   }
 );
@@ -261,6 +418,7 @@ export function SortableRule(props: SortableProps) {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: active?.id === props.rule.id ? 0.3 : 1,
+    margin: -1,
   };
 
   return (
@@ -271,4 +429,175 @@ export function SortableRule(props: SortableProps) {
       handle={{ ...attributes, ...listeners }}
     />
   );
+}
+
+function SkippedPill() {
+  return (
+    <Badge
+      color="amber"
+      label={
+        <>
+          <PiArrowBendRightDown />
+          Skipped
+        </>
+      }
+    />
+  );
+}
+
+export type RuleMetaInfo = {
+  pill?: ReactElement;
+  callout?: ReactElement;
+  sideColor: "active" | "skipped" | "disabled" | "unreachable";
+};
+
+export function getRuleMetaInfo({
+  rule,
+  experimentsMap,
+  isDraft,
+  unreachable,
+}: {
+  rule: FeatureRule;
+  experimentsMap: Map<string, ExperimentInterfaceStringDates>;
+  isDraft: boolean;
+  unreachable?: boolean;
+}): RuleMetaInfo {
+  const linkedExperiment =
+    rule.type === "experiment-ref"
+      ? experimentsMap.get(rule.experimentId)
+      : undefined;
+  const ruleInactive = isRuleInactive(rule, experimentsMap);
+  const ruleSkipped = isRuleSkipped({
+    rule,
+    linkedExperiment,
+    isDraft,
+  });
+
+  const upcomingScheduleRule = getUpcomingScheduleRule(rule);
+
+  const scheduleCompletedAndDisabled =
+    !upcomingScheduleRule &&
+    rule?.scheduleRules?.length &&
+    rule.scheduleRules.at(-1)?.timestamp !== null;
+
+  // Inactive due to explicitly being disabled
+  if (!rule.enabled) {
+    return {
+      pill: (
+        <Badge
+          color="gray"
+          title="Rule is not enabled"
+          label={
+            <>
+              <RxCircleBackslash />
+              Disabled
+            </>
+          }
+        />
+      ),
+      sideColor: "disabled",
+    };
+  }
+
+  // Inactive due to a schedule that is finished
+  if (
+    scheduleCompletedAndDisabled &&
+    rule.scheduleRules &&
+    rule.scheduleRules.length > 0
+  ) {
+    const lastRule = rule.scheduleRules[rule.scheduleRules.length - 1];
+    if (lastRule && lastRule.timestamp) {
+      return {
+        pill: <SkippedPill />,
+        callout: (
+          <Callout status="warning">
+            Disabled by a schedule on{" "}
+            {new Date(lastRule.timestamp).toLocaleDateString()} at{" "}
+            {formatTimeZone(new Date(lastRule.timestamp), "h:mm a z")}
+          </Callout>
+        ),
+        sideColor: "skipped",
+      };
+    }
+  }
+
+  // Inactive for some other reason (e.g. experiment is archived)
+  if (ruleInactive) {
+    // Assume callout will be added by the rule summary
+    return {
+      pill: <SkippedPill />,
+      sideColor: "skipped",
+    };
+  }
+
+  // Skipped, but will be enabled on a schedule
+  if (
+    upcomingScheduleRule &&
+    upcomingScheduleRule.enabled &&
+    upcomingScheduleRule.timestamp
+  ) {
+    return {
+      pill: <SkippedPill />,
+      callout: (
+        <Callout status="warning">
+          Will be enabled on{" "}
+          {new Date(upcomingScheduleRule.timestamp).toLocaleDateString()} at{" "}
+          {formatTimeZone(new Date(upcomingScheduleRule.timestamp), "h:mm a z")}
+        </Callout>
+      ),
+      sideColor: "skipped",
+    };
+  }
+
+  // Skipped for some other reason
+  if (ruleSkipped) {
+    return {
+      pill: <SkippedPill />,
+      sideColor: "skipped",
+    };
+  }
+
+  // Rule is not reachable
+  if (unreachable) {
+    return {
+      pill: (
+        <Badge
+          color="orange"
+          title="Rule not reachable"
+          label={
+            <>
+              <RiAlertLine />
+              Unreachable
+            </>
+          }
+        />
+      ),
+      callout: (
+        <Callout status="warning">
+          Rules above will serve 100% of traffic and this rule will never be
+          used
+        </Callout>
+      ),
+      sideColor: "unreachable",
+    };
+  }
+
+  // Active, but will be disabled on a schedule
+  if (upcomingScheduleRule && upcomingScheduleRule.timestamp) {
+    return {
+      callout: (
+        <Callout status="info">
+          Will be disabled on{" "}
+          {new Date(upcomingScheduleRule.timestamp).toLocaleDateString()} at{" "}
+          {formatTimeZone(new Date(upcomingScheduleRule.timestamp), "h:mm a z")}
+        </Callout>
+      ),
+      sideColor: "active",
+    };
+  }
+
+  // Active
+  return {
+    sideColor: "active",
+  };
 }

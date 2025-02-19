@@ -2,8 +2,9 @@
 
 .droparea {
   z-index: 910;
-  text-align: center;
   position: relative;
+  width: 100%;
+  text-align: center;
 
   .message {
     display: none;
@@ -16,13 +17,26 @@
     font-size: 1.2em;
     color: $green;
   }
+  .textlink {
+    color: $primary-blue;
+  }
+
+  &:hover {
+    //border: 1px dashed $darker-blue;
+    .textlink {
+      color: $darker-blue;
+    }
+  }
 }
 .droparea.dragging {
   background: rgba(255, 255, 255, 0.9);
-  border: 3px dashed $green;
+  border: 2px dashed $green;
 
   .message {
     display: block;
+  }
+  .textlink {
+    visibility: hidden;
   }
 
   button {

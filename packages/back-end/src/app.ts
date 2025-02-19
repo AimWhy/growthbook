@@ -1,107 +1,147 @@
+import path from "path";
+import { existsSync, readFileSync } from "fs";
 import bodyParser from "body-parser";
 import cookieParser from "cookie-parser";
-import express, {
-  RequestHandler,
-  ErrorRequestHandler,
-  Response,
-} from "express";
-import mongoInit from "./init/mongo";
-import { usingFileConfig } from "./init/config";
+import express, { ErrorRequestHandler, Request, Response } from "express";
 import cors from "cors";
+import asyncHandler from "express-async-handler";
+import compression from "compression";
+import * as Sentry from "@sentry/node";
+import { populationDataRouter } from "back-end/src/routers/population-data/population-data.router";
+import { usingFileConfig } from "./init/config";
 import { AuthRequest } from "./types/AuthRequest";
 import {
   APP_ORIGIN,
   CORS_ORIGIN_REGEX,
+  ENVIRONMENT,
+  EXPRESS_TRUST_PROXY_OPTS,
   IS_CLOUD,
-  UPLOAD_METHOD,
+  SENTRY_DSN,
 } from "./util/secrets";
 import {
   getExperimentConfig,
   getExperimentsScript,
 } from "./controllers/config";
-import asyncHandler from "express-async-handler";
-import pino from "pino-http";
 import { verifySlackRequestSignature } from "./services/slack";
-import { getJWTCheck, processJWT } from "./services/auth";
-import compression from "compression";
-import fs from "fs";
-import path from "path";
+import { getAuthConnection, processJWT, usingOpenId } from "./services/auth";
+import { wrapController } from "./routers/wrapController";
+import apiRouter from "./api/api.router";
+import scimRouter from "./scim/scim.router";
+import { getBuild } from "./util/handler";
 
-// Controllers
-import * as authController from "./controllers/auth";
-import * as organizationsController from "./controllers/organizations";
-import * as datasourcesController from "./controllers/datasources";
-import * as experimentsController from "./controllers/experiments";
-import * as metricsController from "./controllers/metrics";
-import * as reportsController from "./controllers/reports";
-import * as ideasController from "./controllers/ideas";
-import * as presentationController from "./controllers/presentations";
-import * as discussionsController from "./controllers/discussions";
-import * as adminController from "./controllers/admin";
-import * as stripeController from "./controllers/stripe";
-import * as segmentsController from "./controllers/segments";
-import * as dimensionsController from "./controllers/dimensions";
-import * as projectsController from "./controllers/projects";
-import * as featuresController from "./controllers/features";
-import * as slackController from "./controllers/slack";
-import * as tagsController from "./controllers/tags";
-import { getUploadsDir } from "./services/files";
-import { queueInit } from "./init/queue";
-import { isEmailEnabled } from "./services/email";
+if (SENTRY_DSN) {
+  const buildInfo = getBuild();
 
-// Wrap every controller function in asyncHandler to catch errors properly
-// eslint-disable-next-line
-function wrapController(controller: Record<string, RequestHandler<any>>): void {
-  Object.keys(controller).forEach((key) => {
-    if (typeof controller[key] === "function") {
-      controller[key] = asyncHandler(controller[key]);
-    }
-  });
+  Sentry.init({ dsn: SENTRY_DSN, release: buildInfo.sha });
+
+  Sentry.setTag("build_date", buildInfo.date);
 }
-wrapController(authController);
-wrapController(organizationsController);
-wrapController(datasourcesController);
-wrapController(experimentsController);
-wrapController(metricsController);
-wrapController(ideasController);
-wrapController(presentationController);
-wrapController(discussionsController);
-wrapController(adminController);
-wrapController(stripeController);
-wrapController(segmentsController);
-wrapController(dimensionsController);
-wrapController(projectsController);
-wrapController(featuresController);
-wrapController(slackController);
-wrapController(reportsController);
-wrapController(tagsController);
+
+// Begin Controllers
+import * as authControllerRaw from "./controllers/auth";
+const authController = wrapController(authControllerRaw);
+
+import * as datasourcesControllerRaw from "./controllers/datasources";
+const datasourcesController = wrapController(datasourcesControllerRaw);
+
+import * as experimentsControllerRaw from "./controllers/experiments";
+const experimentsController = wrapController(experimentsControllerRaw);
+
+import * as experimentLaunchChecklistControllerRaw from "./controllers/experimentLaunchChecklist";
+const experimentLaunchChecklistController = wrapController(
+  experimentLaunchChecklistControllerRaw
+);
+
+import * as metricsControllerRaw from "./controllers/metrics";
+const metricsController = wrapController(metricsControllerRaw);
+
+import * as reportsControllerRaw from "./controllers/reports";
+const reportsController = wrapController(reportsControllerRaw);
+
+import * as ideasControllerRaw from "./controllers/ideas";
+const ideasController = wrapController(ideasControllerRaw);
+
+import * as presentationControllerRaw from "./controllers/presentations";
+const presentationController = wrapController(presentationControllerRaw);
+
+import * as discussionsControllerRaw from "./controllers/discussions";
+const discussionsController = wrapController(discussionsControllerRaw);
+
+import * as adminControllerRaw from "./controllers/admin";
+const adminController = wrapController(adminControllerRaw);
+
+import * as licenseControllerRaw from "./controllers/license";
+const licenseController = wrapController(licenseControllerRaw);
+
+import * as stripeControllerRaw from "./controllers/stripe";
+const stripeController = wrapController(stripeControllerRaw);
+
+import * as vercelControllerRaw from "./controllers/vercel";
+const vercelController = wrapController(vercelControllerRaw);
+
+import * as featuresControllerRaw from "./controllers/features";
+const featuresController = wrapController(featuresControllerRaw);
+
+import * as slackControllerRaw from "./controllers/slack";
+const slackController = wrapController(slackControllerRaw);
+
+import * as informationSchemasControllerRaw from "./controllers/informationSchemas";
+const informationSchemasController = wrapController(
+  informationSchemasControllerRaw
+);
+
+// End Controllers
+
+import { isEmailEnabled } from "./services/email";
+import { init } from "./init";
+import { getCustomLogProps, httpLogger } from "./util/logger";
+import { usersRouter } from "./routers/users/users.router";
+import { organizationsRouter } from "./routers/organizations/organizations.router";
+import { uploadRouter } from "./routers/upload/upload.router";
+import { eventsRouter } from "./routers/events/events.router";
+import { eventWebHooksRouter } from "./routers/event-webhooks/event-webhooks.router";
+import { tagRouter } from "./routers/tag/tag.router";
+import { savedGroupRouter } from "./routers/saved-group/saved-group.router";
+import { ArchetypeRouter } from "./routers/archetype/archetype.router";
+import { AttributeRouter } from "./routers/attributes/attributes.router";
+import { customFieldsRouter } from "./routers/custom-fields/custom-fields.router";
+import { segmentRouter } from "./routers/segment/segment.router";
+import { dimensionRouter } from "./routers/dimension/dimension.router";
+import { sdkConnectionRouter } from "./routers/sdk-connection/sdk-connection.router";
+import { projectRouter } from "./routers/project/project.router";
+import { factTableRouter } from "./routers/fact-table/fact-table.router";
+import { slackIntegrationRouter } from "./routers/slack-integration/slack-integration.router";
+import { dataExportRouter } from "./routers/data-export/data-export.router";
+import { demoDatasourceProjectRouter } from "./routers/demo-datasource-project/demo-datasource-project.router";
+import { environmentRouter } from "./routers/environment/environment.router";
+import { teamRouter } from "./routers/teams/teams.router";
+import { githubIntegrationRouter } from "./routers/github-integration/github-integration.router";
+import { urlRedirectRouter } from "./routers/url-redirects/url-redirects.router";
+import { metricAnalysisRouter } from "./routers/metric-analysis/metric-analysis.router";
+import { metricGroupRouter } from "./routers/metric-group/metric-group.router";
+import { findOrCreateGeneratedHypothesis } from "./models/GeneratedHypothesis";
+import { getContextFromReq } from "./services/organizations";
+import { templateRouter } from "./routers/experiment-template/template.router";
 
 const app = express();
 
-let initPromise: Promise<void>;
-async function init() {
-  if (!initPromise) {
-    initPromise = (async () => {
-      await mongoInit();
-      await queueInit();
-    })();
-  }
-  try {
-    await initPromise;
-  } catch (err) {
-    console.error(err);
-    process.exit(1);
-  }
+if (SENTRY_DSN) {
+  app.use(
+    Sentry.Handlers.requestHandler({
+      user: ["email", "sub"],
+    })
+  );
 }
 
-if (!process.env.NO_INIT) {
+if (!process.env.NO_INIT && process.env.NODE_ENV !== "test") {
   init();
 }
 
 app.set("port", process.env.PORT || 3100);
+app.set("trust proxy", EXPRESS_TRUST_PROXY_OPTS);
 
 // Pretty print on dev
-if (process.env.NODE_ENV !== "production") {
+if (ENVIRONMENT !== "production") {
   app.set("json spaces", 2);
 }
 
@@ -120,75 +160,43 @@ app.get("/favicon.ico", (req, res) => {
   res.status(404).send("");
 });
 
-app.use(compression());
-
-let build: { sha: string; date: string };
-app.get("/", (req, res) => {
-  if (!build) {
-    build = {
-      sha: "",
-      date: "",
-    };
-    const rootPath = path.join(__dirname, "..", "..", "..", "buildinfo");
-    if (fs.existsSync(path.join(rootPath, "SHA"))) {
-      build.sha = fs.readFileSync(path.join(rootPath, "SHA")).toString().trim();
-    }
-    if (fs.existsSync(path.join(rootPath, "DATE"))) {
-      build.date = fs
-        .readFileSync(path.join(rootPath, "DATE"))
-        .toString()
-        .trim();
+let robotsTxt = "";
+app.get("/robots.txt", (_req, res) => {
+  if (!robotsTxt) {
+    const file =
+      process.env.ROBOTS_TXT_PATH || path.join(__dirname, "..", "robots.txt");
+    if (existsSync(file)) {
+      robotsTxt = readFileSync(file).toString();
+    } else {
+      res.status(404).json({
+        message: "Not found",
+      });
+      return;
     }
   }
 
+  res.setHeader("Cache-Control", "max-age=3600");
+  res.setHeader("Content-Type", "text/plain");
+  res.send(robotsTxt);
+});
+
+app.use(compression());
+
+app.get("/", (req, res) => {
   res.json({
     name: "GrowthBook API",
-    production: process.env.NODE_ENV === "production",
-    api_host: req.protocol + "://" + req.hostname + ":" + app.get("port"),
+    production: ENVIRONMENT === "production",
+    api_host:
+      process.env.API_HOST ||
+      req.protocol + "://" + req.hostname + ":" + app.get("port"),
     app_origin: APP_ORIGIN,
     config_source: usingFileConfig() ? "file" : "db",
     email_enabled: isEmailEnabled(),
-    build,
+    build: getBuild(),
   });
 });
 
-// Request logging
-const logger = pino({
-  autoLogging: process.env.NODE_ENV === "production",
-  redact: {
-    paths: [
-      "req.headers.authorization",
-      'req.headers["if-none-match"]',
-      'req.headers["cache-control"]',
-      'req.headers["upgrade-insecure-requests"]',
-      "req.headers.cookie",
-      "req.headers.connection",
-      'req.headers["accept"]',
-      'req.headers["accept-encoding"]',
-      'req.headers["accept-language"]',
-      'req.headers["sec-fetch-site"]',
-      'req.headers["sec-fetch-mode"]',
-      'req.headers["sec-fetch-dest"]',
-      'req.headers["sec-ch-ua-mobile"]',
-      'req.headers["sec-ch-ua"]',
-      'req.headers["sec-fetch-user"]',
-      "res.headers.etag",
-      'res.headers["x-powered-by"]',
-      'res.headers["access-control-allow-credentials"]',
-      'res.headers["access-control-allow-origin"]',
-    ],
-    remove: true,
-  },
-  prettyPrint:
-    process.env.NODE_ENV === "production"
-      ? false
-      : {
-          colorize: true,
-          translateTime: "SYS:standard",
-          messageFormat: "{levelLabel} {req.url}",
-        },
-});
-app.use(logger);
+app.use(httpLogger);
 
 // Initialize db connections
 app.use(async (req, res, next) => {
@@ -222,7 +230,8 @@ app.post(
   slackController.postIdeas
 );
 
-app.use(bodyParser.json());
+// increase max payload json size to 1mb
+app.use(bodyParser.json({ limit: "1mb" }));
 
 // Public API routes (does not require JWT, does require cors with origin = *)
 app.get(
@@ -233,8 +242,10 @@ app.get(
   }),
   getExperimentConfig
 );
+
+// Public features for SDKs
 app.get(
-  "/api/features/:key",
+  "/api/features/:key?",
   cors({
     credentials: false,
     origin: "*",
@@ -243,14 +254,75 @@ app.get(
 );
 // For preflight requests
 app.options(
-  "/api/features/:key",
+  "/api/features/:key?",
   cors({
     credentials: false,
     origin: "*",
   }),
-  function (req, res) {
-    res.send(200);
-  }
+  (req, res) => res.send(200)
+);
+
+if (!IS_CLOUD) {
+  // Public remoteEval for SDKs:
+  // note: Self-hosted only, recommended for debugging. Cloud orgs must use separate infrastructure.
+  app.post(
+    "/api/eval/:key?",
+    cors({
+      credentials: false,
+      origin: "*",
+    }),
+    featuresController.getEvaluatedFeaturesPublic
+  );
+  // For preflight requests
+  app.options(
+    "/api/eval/:key?",
+    cors({
+      credentials: false,
+      origin: "*",
+    }),
+    (req, res) => res.send(200)
+  );
+}
+
+// public shareable reports
+app.get(
+  "/api/report/public/:uid",
+  cors({
+    credentials: false,
+    origin: "*",
+  }),
+  reportsController.getReportPublic
+);
+// public shareable experiments
+app.get(
+  "/api/experiment/public/:uid",
+  cors({
+    credentials: false,
+    origin: "*",
+  }),
+  experimentsController.getExperimentPublic
+);
+
+// Secret API routes (no JWT or CORS)
+app.use(
+  "/api/v1",
+  // TODO add authentication
+  cors({
+    origin: "*",
+  }),
+  apiRouter
+);
+
+// SCIM API routes (no JWT or CORS)
+app.use(
+  "/scim/v2",
+  bodyParser.json({
+    type: "application/scim+json",
+  }),
+  cors({
+    origin: "*",
+  }),
+  scimRouter
 );
 
 // Accept cross-origin requests from the frontend app
@@ -265,70 +337,49 @@ app.use(
   })
 );
 
-// Pre-auth requests
-// Managed cloud deployment uses Auth0 instead
-if (!IS_CLOUD) {
-  app.post("/auth/refresh", authController.postRefresh);
+const useSSO = usingOpenId();
+
+// Pre-auth requests when not using SSO
+if (!useSSO) {
   app.post("/auth/login", authController.postLogin);
-  app.post("/auth/logout", authController.postLogout);
   app.post("/auth/register", authController.postRegister);
   app.post("/auth/firsttime", authController.postFirstTimeRegister);
   app.post("/auth/forgot", authController.postForgotPassword);
   app.get("/auth/reset/:token", authController.getResetPassword);
   app.post("/auth/reset/:token", authController.postResetPassword);
 }
-app.get("/auth/hasorgs", authController.getHasOrganizations);
-
-// File uploads don't require auth tokens.
-// Upload urls are signed and image access is public.
-if (UPLOAD_METHOD === "local") {
-  // Create 'uploads' directory if it doesn't exist yet
-  const uploadDir = getUploadsDir();
-  if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir);
-  }
-
-  app.put(
-    "/upload",
-    bodyParser.raw({
-      type: "image/*",
-      limit: "10mb",
-    }),
-    organizationsController.putUpload
-  );
-  app.use("/upload", express.static(uploadDir));
-
-  // Stop upload requests from running any of the middlewares defined below
-  app.use("/upload", () => {
-    return;
-  });
+// Pre-auth requests when using SSO
+else {
+  app.post("/auth/sso", authController.getSSOConnectionFromDomain);
+  app.post("/auth/callback", authController.postOAuthCallback);
 }
 
+//  Pre-auth requests that are always available
+app.post("/auth/refresh", authController.postRefresh);
+app.post("/auth/logout", authController.postLogout);
+app.get("/auth/hasorgs", authController.getHasOrganizations);
+
 // All other routes require a valid JWT
-app.use(getJWTCheck());
+const auth = getAuthConnection();
+app.use(auth.middleware);
 
 // Add logged in user props to the request
-app.use(processJWT);
+app.use(asyncHandler(processJWT));
 
 // Add logged in user props to the logger
 app.use(
   (req: AuthRequest, res: Response & { log: AuthRequest["log"] }, next) => {
-    res.log = req.log = req.log.child({
-      userId: req.userId,
-      admin: !!req.admin,
-    });
+    res.log = req.log = req.log.child(getCustomLogProps(req as Request));
     next();
   }
 );
 
 // Logged-in auth requests
-// Managed cloud deployment uses Auth0 instead
-if (!IS_CLOUD) {
+if (!useSSO) {
   app.post("/auth/change-password", authController.postChangePassword);
 }
 
-// Organizations
-app.get("/user", organizationsController.getUser);
+app.use("/user", usersRouter);
 
 // Every other route requires a userId to be set
 app.use(
@@ -341,42 +392,51 @@ app.use(
 );
 
 // Organization and Settings
-app.put("/user/name", organizationsController.putUserName);
-app.get("/user/watching", organizationsController.getWatchedItems);
-app.post("/user/watch/:type/:id", organizationsController.postWatchItem);
-app.post("/user/unwatch/:type/:id", organizationsController.postUnwatchItem);
-app.get("/organization/definitions", organizationsController.getDefinitions);
-app.get("/activity", organizationsController.getActivityFeed);
-app.get("/history/:type/:id", organizationsController.getHistory);
-app.get("/organization", organizationsController.getOrganization);
-app.post("/organization", organizationsController.signup);
-app.put("/organization", organizationsController.putOrganization);
-app.post(
-  "/organization/config/import",
-  organizationsController.postImportConfig
-);
-app.get("/organization/namespaces", organizationsController.getNamespaces);
-app.post("/organization/namespaces", organizationsController.postNamespaces);
-app.post("/invite/accept", organizationsController.postInviteAccept);
-app.post("/invite", organizationsController.postInvite);
-app.post("/invite/resend", organizationsController.postInviteResend);
-app.delete("/invite", organizationsController.deleteInvite);
-app.get("/members", organizationsController.getUsers);
-app.delete("/member/:id", organizationsController.deleteMember);
-app.put("/member/:id/role", organizationsController.putMemberRole);
+app.use(organizationsRouter);
+
+app.use("/environment", environmentRouter);
+
 app.post("/oauth/google", datasourcesController.postGoogleOauthRedirect);
-app.post("/subscription/start", stripeController.postStartTrial);
+app.post(
+  "/subscription/new-pro-trial",
+  stripeController.postNewProTrialSubscription
+);
+app.post("/subscription/new", stripeController.postNewProSubscription);
 app.post("/subscription/manage", stripeController.postCreateBillingSession);
+app.post("/subscription/success", stripeController.postSubscriptionSuccess);
+
+app.get("/billing/usage", stripeController.getUsage);
+
 app.get("/queries/:ids", datasourcesController.getQueries);
-app.post("/organization/sample-data", datasourcesController.postSampleData);
-app.put(
-  "/member/:id/admin-password-reset",
-  organizationsController.putAdminResetUserPassword
+app.post("/query/test", datasourcesController.testLimitedQuery);
+app.post("/dimension-slices", datasourcesController.postDimensionSlices);
+app.get("/dimension-slices/:id", datasourcesController.getDimensionSlices);
+app.post(
+  "/dimension-slices/:id/cancel",
+  datasourcesController.cancelDimensionSlices
 );
 
-// tags
-app.post("/tag", tagsController.postTag);
-app.delete("/tag/:id", tagsController.deleteTag);
+app.get(
+  "/dimension-slices/datasource/:datasourceId/:exposureQueryId",
+  datasourcesController.getLatestDimensionSlicesForDatasource
+);
+
+if (IS_CLOUD) {
+  app.get("/vercel/has-token", vercelController.getHasToken);
+  app.post("/vercel/token", vercelController.postToken);
+  app.post("/vercel/env-vars", vercelController.postEnvVars);
+  app.get("/vercel/config", vercelController.getConfig);
+}
+
+app.use("/tag", tagRouter);
+
+app.use("/saved-groups", savedGroupRouter);
+
+app.use("/archetype", ArchetypeRouter);
+
+app.use("/attribute", AttributeRouter);
+
+app.use("/custom-fields", customFieldsRouter);
 
 // Ideas
 app.get("/ideas", ideasController.getIdeas);
@@ -386,22 +446,39 @@ app.post("/idea/:id", ideasController.postIdea);
 app.delete("/idea/:id", ideasController.deleteIdea);
 app.post("/idea/:id/vote", ideasController.postVote);
 app.post("/ideas/impact", ideasController.getEstimatedImpact);
-app.post("/ideas/estimate/manual", ideasController.postEstimatedImpactManual);
 app.get("/ideas/recent/:num", ideasController.getRecentIdeas);
 
 // Metrics
 app.get("/metrics", metricsController.getMetrics);
 app.post("/metrics", metricsController.postMetrics);
+app.post(
+  "/metrics/tracked-events/:datasourceId",
+  metricsController.getMetricsFromTrackedEvents
+);
+app.post("/metrics/auto-metrics", metricsController.postAutoGeneratedMetrics);
 app.get("/metric/:id", metricsController.getMetric);
 app.put("/metric/:id", metricsController.putMetric);
 app.delete("/metric/:id", metricsController.deleteMetric);
 app.get("/metric/:id/usage", metricsController.getMetricUsage);
-app.post("/metric/:id/analysis", metricsController.postMetricAnalysis);
-app.get(
-  "/metric/:id/analysis/status",
-  metricsController.getMetricAnalysisStatus
+app.post("/metric/:id/analysis", metricsController.postLegacyMetricAnalysis);
+app.post(
+  "/metric/:id/analysis/cancel",
+  metricsController.cancelLegacyMetricAnalysis
 );
-app.post("/metric/:id/analysis/cancel", metricsController.cancelMetricAnalysis);
+app.get(
+  "/metrics/:id/experiments",
+  metricsController.getMetricExperimentResults
+);
+app.get("/metrics/:id/northstar", metricsController.getMetricNorthstarData);
+
+// Metric Analyses
+app.use(metricAnalysisRouter);
+
+// Metric Groups
+app.use(metricGroupRouter);
+
+// Population Data for power
+app.use(populationDataRouter);
 
 // Experiments
 app.get("/experiments", experimentsController.getExperiments);
@@ -410,12 +487,15 @@ app.get(
   "/experiments/frequency/month/:num",
   experimentsController.getExperimentsFrequencyMonth
 );
-app.get("/experiments/newfeatures/", experimentsController.getNewFeatures);
-app.get("/experiments/snapshots/", experimentsController.getSnapshots);
+app.get(
+  "/experiments/tracking-key",
+  experimentsController.lookupExperimentByTrackingKey
+);
 app.get("/experiment/:id", experimentsController.getExperiment);
 app.get("/experiment/:id/reports", reportsController.getReportsOnExperiment);
-app.get("/snapshot/:id/status", experimentsController.getSnapshotStatus);
+app.get("/snapshot/:id", experimentsController.getSnapshotById);
 app.post("/snapshot/:id/cancel", experimentsController.cancelSnapshot);
+app.post("/snapshot/:id/analysis", experimentsController.postSnapshotAnalysis);
 app.get("/experiment/:id/snapshot/:phase", experimentsController.getSnapshot);
 app.get(
   "/experiment/:id/snapshot/:phase/:dimension",
@@ -423,13 +503,23 @@ app.get(
 );
 app.post("/experiment/:id/snapshot", experimentsController.postSnapshot);
 app.post(
-  "/experiment/:id/snapshot/:phase/preview",
-  experimentsController.previewManualSnapshot
+  "/experiment/:id/banditSnapshot",
+  experimentsController.postBanditSnapshot
+);
+
+app.get("/experiments/snapshots", experimentsController.getSnapshots);
+app.post(
+  "/experiments/snapshots/scaled",
+  experimentsController.postSnapshotsWithScaledImpactAnalysis
 );
 app.post("/experiment/:id", experimentsController.postExperiment);
 app.delete("/experiment/:id", experimentsController.deleteExperiment);
 app.get("/experiment/:id/watchers", experimentsController.getWatchingUsers);
 app.post("/experiment/:id/phase", experimentsController.postExperimentPhase);
+app.post(
+  "/experiment/:id/targeting",
+  experimentsController.postExperimentTargeting
+);
 app.post("/experiment/:id/status", experimentsController.postExperimentStatus);
 app.put(
   "/experiment/:id/phase/:phase",
@@ -461,10 +551,6 @@ app.get(
   "/experiments/import/:id",
   experimentsController.getPastExperimentsList
 );
-app.get(
-  "/experiments/import/:id/status",
-  experimentsController.getPastExperimentStatus
-);
 app.post(
   "/experiments/import/:id/cancel",
   experimentsController.cancelPastExperiments
@@ -477,55 +563,134 @@ app.post(
   "/experiments/report/:snapshot",
   reportsController.postReportFromSnapshot
 );
+app.post(
+  "/experiments/launch-checklist",
+  experimentLaunchChecklistController.postExperimentLaunchChecklist
+);
+app.put(
+  "/experiments/launch-checklist/:id",
+  experimentLaunchChecklistController.putExperimentLaunchChecklist
+);
+app.get(
+  "/experiments/launch-checklist",
+  experimentLaunchChecklistController.getExperimentCheckListByOrg
+);
+app.put(
+  "/experiment/:id/launch-checklist",
+  experimentLaunchChecklistController.putManualLaunchChecklist
+);
+
+// Visual Changesets
+app.post(
+  "/experiments/:id/visual-changeset",
+  experimentsController.postVisualChangeset
+);
+app.put("/visual-changesets/:id", experimentsController.putVisualChangeset);
+app.delete(
+  "/visual-changesets/:id",
+  experimentsController.deleteVisualChangeset
+);
+
+// Visual editor auth
+app.get(
+  "/visual-editor/key",
+  experimentsController.findOrCreateVisualEditorToken
+);
+
+// Experiment Templates
+app.use("/templates", templateRouter);
+
+// URL Redirects
+app.use("/url-redirects", urlRedirectRouter);
 
 // Reports
 app.get("/report/:id", reportsController.getReport);
 app.put("/report/:id", reportsController.putReport);
 app.delete("/report/:id", reportsController.deleteReport);
-app.get("/report/:id/status", reportsController.getReportStatus);
 app.post("/report/:id/refresh", reportsController.refreshReport);
 app.post("/report/:id/cancel", reportsController.cancelReport);
 app.post("/report/:id/notebook", reportsController.postNotebook);
 app.get("/reports", reportsController.getReports);
 
-// Segments
-app.get("/segments", segmentsController.getAllSegments);
-app.post("/segments", segmentsController.postSegments);
-app.put("/segments/:id", segmentsController.putSegment);
-app.delete("/segments/:id", segmentsController.deleteSegment);
-app.get("/segments/:id/usage", segmentsController.getSegmentUsage);
+app.use("/segments", segmentRouter);
 
-// Dimensions
-app.get("/dimensions", dimensionsController.getAllDimensions);
-app.post("/dimensions", dimensionsController.postDimensions);
-app.put("/dimensions/:id", dimensionsController.putDimension);
-app.delete("/dimensions/:id", dimensionsController.deleteDimension);
+app.use("/dimensions", dimensionRouter);
 
-// Projects
-app.post("/projects", projectsController.postProjects);
-app.put("/projects/:id", projectsController.putProject);
-app.delete("/projects/:id", projectsController.deleteProject);
+app.use("/sdk-connections", sdkConnectionRouter);
+
+app.use("/projects", projectRouter);
+
+app.use(factTableRouter);
+
+app.use("/demo-datasource-project", demoDatasourceProjectRouter);
 
 // Features
 app.get("/feature", featuresController.getFeatures);
 app.get("/feature/:id", featuresController.getFeatureById);
+app.get("/feature/:id/usage", featuresController.getFeatureUsage);
 app.post("/feature", featuresController.postFeatures);
 app.put("/feature/:id", featuresController.putFeature);
 app.delete("/feature/:id", featuresController.deleteFeatureById);
 app.post(
-  "/feature/:id/defaultvalue",
+  "/feature/:id/:version/defaultvalue",
   featuresController.postFeatureDefaultValue
 );
-app.post("/feature/:id/discard", featuresController.postFeatureDiscard);
-app.post("/feature/:id/publish", featuresController.postFeaturePublish);
+app.post("/feature/:id/sync", featuresController.postFeatureSync);
+app.post("/feature/:id/schema", featuresController.postFeatureSchema);
+app.post(
+  "/feature/:id/:version/discard",
+  featuresController.postFeatureDiscard
+);
+app.post(
+  "/feature/:id/:version/publish",
+  featuresController.postFeaturePublish
+);
+app.post(
+  "/feature/:id/:version/request",
+  featuresController.postFeatureRequestReview
+);
+app.post(
+  "/feature/:id/:version/submit-review",
+  featuresController.postFeatureReviewOrComment
+);
+app.get("/feature/:id/:version/log", featuresController.getRevisionLog);
 app.post("/feature/:id/archive", featuresController.postFeatureArchive);
 app.post("/feature/:id/toggle", featuresController.postFeatureToggle);
-app.post("/feature/:id/draft", featuresController.postFeatureDraft);
-app.post("/feature/:id/rule", featuresController.postFeatureRule);
-app.put("/feature/:id/rule", featuresController.putFeatureRule);
-app.delete("/feature/:id/rule", featuresController.deleteFeatureRule);
-app.post("/feature/:id/reorder", featuresController.postFeatureMoveRule);
+app.post("/feature/:id/:version/fork", featuresController.postFeatureFork);
+app.post("/feature/:id/:version/rebase", featuresController.postFeatureRebase);
+app.post("/feature/:id/:version/revert", featuresController.postFeatureRevert);
+app.post("/feature/:id/:version/rule", featuresController.postFeatureRule);
+app.post(
+  "/feature/:id/:version/experiment",
+  featuresController.postFeatureExperimentRefRule
+);
+app.put("/feature/:id/:version/comment", featuresController.putRevisionComment);
+app.put("/feature/:id/:version/rule", featuresController.putFeatureRule);
+app.delete("/feature/:id/:version/rule", featuresController.deleteFeatureRule);
+app.post("/feature/:id/prerequisite", featuresController.postPrerequisite);
+app.put("/feature/:id/prerequisite", featuresController.putPrerequisite);
+app.delete("/feature/:id/prerequisite", featuresController.deletePrerequisite);
+app.post(
+  "/feature/:id/:version/reorder",
+  featuresController.postFeatureMoveRule
+);
+app.post("/features/eval", featuresController.postFeaturesEvaluate);
+app.post("/feature/:id/:version/eval", featuresController.postFeatureEvaluate);
 app.get("/usage/features", featuresController.getRealtimeUsage);
+app.post(
+  "/feature/:id/toggleStaleDetection",
+  featuresController.toggleStaleFFDetectionForFeature
+);
+app.post(
+  "/feature/:id/:version/comment",
+  featuresController.postFeatureReviewOrComment
+);
+app.post(
+  "/feature/:id/:version/copyEnvironment",
+  featuresController.postCopyEnvironmentRules
+);
+
+app.get("/revision/feature", featuresController.getDraftandReviewRevisions);
 
 // Data Sources
 app.get("/datasources", datasourcesController.getDataSources);
@@ -533,17 +698,56 @@ app.get("/datasource/:id", datasourcesController.getDataSource);
 app.post("/datasources", datasourcesController.postDataSources);
 app.put("/datasource/:id", datasourcesController.putDataSource);
 app.delete("/datasource/:id", datasourcesController.deleteDataSource);
+app.get("/datasource/:id/metrics", datasourcesController.getDataSourceMetrics);
+app.get("/datasource/:id/queries", datasourcesController.getDataSourceQueries);
+app.put(
+  "/datasource/:datasourceId/exposureQuery/:exposureQueryId",
+  datasourcesController.updateExposureQuery
+);
+app.post(
+  "/datasources/fetch-bigquery-datasets",
+  datasourcesController.fetchBigQueryDatasets
+);
 
-// API keys
-app.get("/keys", organizationsController.getApiKeys);
-app.post("/keys", organizationsController.postApiKey);
-app.delete("/key/:key", organizationsController.deleteApiKey);
+if (IS_CLOUD) {
+  app.post(
+    "/datasource/create-inbuilt",
+    datasourcesController.postInbuiltDataSource
+  );
+}
 
-// Webhooks
-app.get("/webhooks", organizationsController.getWebhooks);
-app.post("/webhooks", organizationsController.postWebhook);
-app.put("/webhook/:id", organizationsController.putWebhook);
-app.delete("/webhook/:id", organizationsController.deleteWebhook);
+// Information Schemas
+app.get(
+  "/datasource/:datasourceId/schema/table/:tableId",
+  informationSchemasController.getTableData
+);
+app.put(
+  "/datasource/:datasourceId/schema/table/:tableId",
+  informationSchemasController.putTableData
+);
+app.post(
+  "/datasource/:datasourceId/schema",
+  informationSchemasController.postInformationSchema
+);
+app.put(
+  "/datasource/:datasourceId/schema",
+  informationSchemasController.putInformationSchema
+);
+app.get(
+  "/datasource/:datasourceId/schema",
+  informationSchemasController.getInformationSchema
+);
+
+// Events
+app.use("/events", eventsRouter);
+app.use(eventWebHooksRouter);
+
+// Slack integration
+app.use("/integrations/slack", slackIntegrationRouter);
+app.use("/integrations/github", githubIntegrationRouter);
+
+// Data Export
+app.use("/data-export", dataExportRouter);
 
 // Presentations
 app.get("/presentations", presentationController.getPresentations);
@@ -571,11 +775,54 @@ app.delete(
   discussionsController.deleteComment
 );
 app.get("/discussions/recent/:num", discussionsController.getRecentDiscussions);
-app.post("/file/upload/:filetype", discussionsController.postImageUploadUrl);
+app.use("/upload", uploadRouter);
+
+// Teams
+app.use("/teams", teamRouter);
 
 // Admin
 app.get("/admin/organizations", adminController.getOrganizations);
-app.post("/admin/organization/:id/populate", adminController.addSampleData);
+app.put("/admin/organization", adminController.putOrganization);
+app.put("/admin/organization/disable", adminController.disableOrganization);
+app.put("/admin/organization/enable", adminController.enableOrganization);
+app.get(
+  "/admin/organization/:orgId/members",
+  adminController.getOrganizationMembers
+);
+app.get("/admin/members", adminController.getMembers);
+app.put("/admin/member", adminController.putMember);
+
+// License
+app.get("/license", licenseController.getLicenseData);
+app.get("/license/report", licenseController.getLicenseReport);
+app.post(
+  "/license/enterprise-trial",
+  licenseController.postCreateTrialEnterpriseLicense
+);
+app.post(
+  "/license/resend-verification-email",
+  licenseController.postResendEmailVerificationEmail
+);
+app.post("/license/verify-email", licenseController.postVerifyEmail);
+
+app.get(
+  "/generated-hypothesis/:uuid",
+  async (req: AuthRequest<null, { uuid: string }>, res) => {
+    const context = getContextFromReq(req);
+    const generatedHypothesis = await findOrCreateGeneratedHypothesis(
+      context,
+      req.params.uuid
+    );
+    return res.json({ generatedHypothesis });
+  }
+);
+
+// Meta info
+app.get("/meta/ai", (req, res) => {
+  res.json({
+    enabled: !!process.env.OPENAI_API_KEY,
+  });
+});
 
 // Fallback 404 route if nothing else matches
 app.use(function (req, res) {
@@ -585,19 +832,29 @@ app.use(function (req, res) {
   });
 });
 
-// eslint-disable-next-line
-const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
+if (SENTRY_DSN) {
+  app.use(Sentry.Handlers.errorHandler());
+}
+
+const errorHandler: ErrorRequestHandler = (
+  err,
+  req,
+  res: Response & { sentry?: string },
+  // eslint-disable-next-line
+  next
+) => {
   const status = err.status || 400;
 
   if (req.log) {
-    req.log.error(err);
+    req.log.error(err.message);
   } else {
-    logger.logger.error(err);
+    httpLogger.logger.error(getCustomLogProps(req), err.message);
   }
 
   res.status(status).json({
     status: status,
     message: err.message || "An error occurred",
+    errorId: SENTRY_DSN ? res.sentry : undefined,
   });
 };
 app.use(errorHandler);

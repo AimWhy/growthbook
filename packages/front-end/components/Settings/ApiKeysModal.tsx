@@ -1,60 +1,73 @@
 import { FC } from "react";
-import { useAuth } from "../../services/auth";
-import Modal from "../Modal";
 import { useForm } from "react-hook-form";
-import track from "../../services/track";
-import Field from "../Forms/Field";
-import { useEnvironments } from "../../services/features";
+import { useAuth } from "@/services/auth";
+import track from "@/services/track";
+import Modal from "@/components/Modal";
+import Field from "@/components/Forms/Field";
+import SelectField from "@/components/Forms/SelectField";
 
 const ApiKeysModal: FC<{
   close: () => void;
   onCreate: () => void;
   defaultDescription?: string;
-}> = ({ close, onCreate, defaultDescription = "" }) => {
+  type?: "admin" | "readonly" | "user";
+}> = ({ close, type, onCreate, defaultDescription = "" }) => {
   const { apiCall } = useAuth();
-  const environments = useEnvironments();
 
-  const form = useForm({
+  const form = useForm<{
+    description: string;
+    type: string;
+  }>({
     defaultValues: {
       description: defaultDescription,
-      environment: environments[0]?.id || "dev",
+      type,
     },
   });
 
   const onSubmit = form.handleSubmit(async (value) => {
     await apiCall("/keys", {
       method: "POST",
-      body: JSON.stringify(value),
+      body: JSON.stringify({
+        ...value,
+      }),
     });
     track("Create API Key", {
-      environment: value.environment,
+      isSecret: value.type !== "user",
     });
     onCreate();
   });
 
   return (
     <Modal
+      trackingEventModalType=""
       close={close}
-      header="Create New Key"
+      header={"Create API Key"}
       open={true}
       submit={onSubmit}
       cta="Create"
     >
       <Field
-        label="Description (optional)"
-        textarea
+        label="Description"
+        required={true}
         {...form.register("description")}
       />
-      <Field
-        label="Environment"
-        options={environments.map((e) => {
-          return {
-            value: e.id,
-            display: e.id,
-          };
-        })}
-        {...form.register("environment")}
-      />
+      {type !== "user" && (
+        <SelectField
+          label="Role"
+          value={form.watch("type")}
+          onChange={(v) => form.setValue("type", v)}
+          options={[
+            {
+              label: "Admin",
+              value: "admin",
+            },
+            {
+              label: "Read-only",
+              value: "readonly",
+            },
+          ]}
+        />
+      )}
     </Modal>
   );
 };

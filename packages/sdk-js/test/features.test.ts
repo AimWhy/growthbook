@@ -1,4 +1,11 @@
-import { Context, GrowthBook } from "../src";
+import { Context, Experiment, GrowthBook } from "../src";
+
+/* eslint-disable */
+const { webcrypto } = require("node:crypto");
+import { TextEncoder, TextDecoder } from "util";
+global.TextEncoder = TextEncoder;
+(global as any).TextDecoder = TextDecoder;
+/* eslint-enable */
 
 const mockCallback = (context: Context) => {
   const onFeatureUsage = jest.fn((a) => {
@@ -24,6 +31,124 @@ describe("features", () => {
     expect(called).toEqual(true);
 
     growthbook.destroy();
+  });
+
+  it("decrypts features with custom SubtleCrypto implementation", async () => {
+    const growthbook = new GrowthBook();
+
+    const keyString = "Ns04T5n9+59rl2x3SlNHtQ==";
+    const encryptedFeatures =
+      "vMSg2Bj/IurObDsWVmvkUg==.L6qtQkIzKDoE2Dix6IAKDcVel8PHUnzJ7JjmLjFZFQDqidRIoCxKmvxvUj2kTuHFTQ3/NJ3D6XhxhXXv2+dsXpw5woQf0eAgqrcxHrbtFORs18tRXRZza7zqgzwvcznx";
+
+    // Make sure it's not using the built-in crypto implementation
+    const originalCrypto = globalThis.crypto;
+    // eslint-disable-next-line
+    (globalThis.crypto as any) = undefined;
+
+    await growthbook.setEncryptedFeatures(
+      encryptedFeatures,
+      keyString,
+      webcrypto.subtle
+    );
+
+    expect(growthbook.getFeatures()).toEqual({
+      testfeature1: {
+        defaultValue: true,
+        rules: [
+          {
+            condition: { id: "1234" },
+            force: false,
+          },
+        ],
+      },
+    });
+
+    growthbook.destroy();
+    globalThis.crypto = originalCrypto;
+  });
+
+  it("decrypts features using the native SubtleCrypto implementation", async () => {
+    const growthbook = new GrowthBook();
+
+    const originalCrypto = globalThis.crypto;
+    globalThis.crypto = webcrypto;
+
+    const keyString = "Ns04T5n9+59rl2x3SlNHtQ==";
+    const encryptedFeatures =
+      "vMSg2Bj/IurObDsWVmvkUg==.L6qtQkIzKDoE2Dix6IAKDcVel8PHUnzJ7JjmLjFZFQDqidRIoCxKmvxvUj2kTuHFTQ3/NJ3D6XhxhXXv2+dsXpw5woQf0eAgqrcxHrbtFORs18tRXRZza7zqgzwvcznx";
+
+    await growthbook.setEncryptedFeatures(encryptedFeatures, keyString);
+
+    expect(growthbook.getFeatures()).toEqual({
+      testfeature1: {
+        defaultValue: true,
+        rules: [
+          {
+            condition: { id: "1234" },
+            force: false,
+          },
+        ],
+      },
+    });
+    growthbook.destroy();
+
+    // Reset
+    globalThis.crypto = originalCrypto;
+  });
+
+  it("throws when decrypting features with invalid key", async () => {
+    const growthbook = new GrowthBook();
+
+    const keyString = "fakeT5n9+59rl2x3SlNHtQ==";
+    const encryptedFeatures =
+      "vMSg2Bj/IurObDsWVmvkUg==.L6qtQkIzKDoE2Dix6IAKDcVel8PHUnzJ7JjmLjFZFQDqidRIoCxKmvxvUj2kTuHFTQ3/NJ3D6XhxhXXv2+dsXpw5woQf0eAgqrcxHrbtFORs18tRXRZza7zqgzwvcznx";
+
+    await expect(
+      growthbook.setEncryptedFeatures(
+        encryptedFeatures,
+        keyString,
+        webcrypto.subtle
+      )
+    ).rejects.toThrow("Failed to decrypt");
+
+    growthbook.destroy();
+  });
+
+  it("throws when decrypting features with invalid encrypted value", async () => {
+    const growthbook = new GrowthBook();
+
+    const keyString = "Ns04T5n9+59rl2x3SlNHtQ==";
+    const encryptedFeatures =
+      "FAKE2Bj/IurObDsWVmvkUg==.L6qtQkIzKDoE2Dix6IAKDcVel8PHUnzJ7JjmLjFZFQDqidRIoCxKmvxvUj2kTuHFTQ3/NJ3D6XhxhXXv2+dsXpw5woQf0eAgqrcxHrbtFORs18tRXRZza7zqgzwvcznx";
+
+    await expect(
+      growthbook.setEncryptedFeatures(
+        encryptedFeatures,
+        keyString,
+        webcrypto.subtle
+      )
+    ).rejects.toThrow();
+
+    growthbook.destroy();
+  });
+
+  it("throws when decrypting features and no SubtleCrypto implementation exists", async () => {
+    const growthbook = new GrowthBook();
+
+    const keyString = "Ns04T5n9+59rl2x3SlNHtQ==";
+    const encryptedFeatures =
+      "vMSg2Bj/IurObDsWVmvkUg==.L6qtQkIzKDoE2Dix6IAKDcVel8PHUnzJ7JjmLjFZFQDqidRIoCxKmvxvUj2kTuHFTQ3/NJ3D6XhxhXXv2+dsXpw5woQf0eAgqrcxHrbtFORs18tRXRZza7zqgzwvcznx";
+
+    const originalCrypto = globalThis.crypto;
+    // eslint-disable-next-line
+    (globalThis.crypto as any) = undefined;
+
+    await expect(
+      growthbook.setEncryptedFeatures(encryptedFeatures, keyString)
+    ).rejects.toThrow("No SubtleCrypto implementation found");
+
+    growthbook.destroy();
+    globalThis.crypto = originalCrypto;
   });
 
   it("can set features asynchronously", () => {
@@ -240,79 +365,6 @@ describe("features", () => {
     growthbook.destroy();
   });
 
-  it("fires real-time usage call", async () => {
-    const f = window.fetch;
-    const mock = jest.fn((url, options) => {
-      return Promise.resolve([url, options]);
-    });
-    // eslint-disable-next-line
-    (window.fetch as any) = mock;
-
-    const growthbook = new GrowthBook({
-      realtimeKey: "abc",
-      realtimeInterval: 50,
-      attributes: { id: "1" },
-      features: {
-        feature1: {
-          defaultValue: "1",
-          rules: [
-            {
-              id: "f",
-              force: "2",
-            },
-          ],
-        },
-        feature3: {
-          rules: [
-            {
-              variations: ["a", "b"],
-            },
-          ],
-        },
-      },
-    });
-
-    expect(growthbook.isOn("feature1")).toEqual(true);
-    expect(growthbook.isOff("feature2")).toEqual(true);
-    expect(growthbook.getFeatureValue("feature3", "default")).toEqual("a");
-
-    await new Promise<void>((resolve) => {
-      window.setTimeout(() => {
-        resolve();
-      }, 100);
-    });
-
-    const events = [
-      {
-        key: "feature1",
-        on: true,
-      },
-      {
-        key: "feature2",
-        on: false,
-      },
-      {
-        key: "feature3",
-        on: true,
-      },
-    ];
-    const expectedUrl = `https://rt.growthbook.io/?key=abc&events=${encodeURIComponent(
-      JSON.stringify(events)
-    )}`;
-
-    expect(mock.mock.calls.length).toEqual(1);
-    expect(mock.mock.calls[0]).toEqual([
-      expectedUrl,
-      {
-        mode: "no-cors",
-        cache: "no-cache",
-      },
-    ]);
-
-    growthbook.destroy();
-    window.fetch = f;
-  });
-
   it("uses fallbacks get getFeatureValue", () => {
     const growthbook = new GrowthBook({
       features: {
@@ -329,34 +381,453 @@ describe("features", () => {
     growthbook.destroy();
   });
 
-  it("clears realtime timer on destroy", async () => {
-    const f = window.fetch;
-    const mock = jest.fn((url, options) => {
-      return Promise.resolve([url, options]);
-    });
-    // eslint-disable-next-line
-    (window.fetch as any) = mock;
+  it("fires remote tracking calls", async () => {
+    const onExperimentViewed = jest.fn((a) => a);
+
+    const exp: Experiment<number | null> = {
+      key: "test",
+      variations: [null, 1],
+      name: "Test",
+      phase: "1",
+    };
+    const result = {
+      featureId: "feature",
+      hashAttribute: "id",
+      hashValue: "123",
+      inExperiment: true,
+      key: "v1",
+      value: 1,
+      variationId: 1,
+      bucket: 0.1234,
+      hashUsed: true,
+      name: "variation 1",
+    };
 
     const growthbook = new GrowthBook({
-      realtimeKey: "abc",
-      realtimeInterval: 50,
+      trackingCallback: onExperimentViewed,
       features: {
-        feature1: {
-          defaultValue: "1",
+        feature: {
+          defaultValue: 0,
+          rules: [
+            {
+              force: 1,
+              tracks: [
+                {
+                  experiment: exp,
+                  result: result,
+                },
+              ],
+            },
+          ],
         },
       },
     });
 
-    expect(growthbook.isOn("feature1")).toEqual(true);
-    growthbook.destroy();
+    const res = growthbook.evalFeature("feature");
+    expect(res.value).toEqual(1);
+    expect(res.source).toEqual("force");
 
-    await new Promise<void>((resolve) => {
-      window.setTimeout(() => {
-        resolve();
-      }, 100);
+    expect(onExperimentViewed.mock.calls.length).toEqual(1);
+    expect(onExperimentViewed.mock.calls[0]).toEqual([exp, result]);
+
+    growthbook.destroy();
+  });
+
+  it("gates flag rule evaluation on prerequisite flag", async () => {
+    const growthbook = new GrowthBook({
+      attributes: {
+        id: "123",
+        memberType: "basic",
+        country: "USA",
+      },
+      features: {
+        parentFlag: {
+          defaultValue: "silver",
+          rules: [
+            {
+              condition: { country: "Canada" },
+              force: "red",
+            },
+            {
+              condition: { country: { $in: ["USA", "Mexico"] } },
+              force: "green",
+            },
+          ],
+        },
+        childFlag: {
+          defaultValue: "default",
+          rules: [
+            {
+              // Bailout (fail) if the parent flag value is not "green"
+              parentConditions: [
+                {
+                  id: "parentFlag",
+                  condition: { value: "green" },
+                  gate: true,
+                },
+              ],
+            },
+            {
+              condition: { memberType: "basic" },
+              force: "success",
+            },
+          ],
+        },
+        childFlagWithMissingPrereq: {
+          defaultValue: "default",
+          rules: [
+            {
+              // Bailout (fail) if the parent flag value is not "green"
+              parentConditions: [
+                {
+                  id: "missingParentFlag",
+                  condition: { value: "green" },
+                  gate: true,
+                },
+              ],
+            },
+          ],
+        },
+      },
     });
 
-    expect(mock.mock.calls.length).toEqual(0);
-    window.fetch = f;
+    const missingResult = growthbook.evalFeature("childFlagWithMissingPrereq");
+    expect(missingResult.value).toEqual(null);
+
+    const result1 = growthbook.evalFeature("childFlag");
+    expect(result1.value).toEqual("success");
+
+    growthbook.setAttributes({
+      id: "123",
+      memberType: "basic",
+      country: "Canada",
+    });
+
+    const result2 = growthbook.evalFeature("childFlag");
+    expect(result2.value).toEqual(null);
+
+    growthbook.destroy();
+  });
+
+  it("gates experiment rule evaluation on prerequisite flag", async () => {
+    const growthbook = new GrowthBook({
+      attributes: {
+        id: "1",
+        country: "USA",
+      },
+      features: {
+        parentFlag: {
+          defaultValue: "silver",
+          rules: [
+            {
+              condition: { country: "Canada" },
+              force: "red",
+            },
+            {
+              condition: { country: { $in: ["USA", "Mexico"] } },
+              force: "green",
+            },
+          ],
+        },
+      },
+      experiments: [
+        {
+          key: "childExperiment",
+          variations: [{}, {}],
+          meta: [
+            {
+              key: "v0",
+              name: "variation 0",
+            },
+            {
+              key: "v1",
+              name: "variation 1",
+            },
+          ],
+          parentConditions: [
+            {
+              id: "parentFlag",
+              condition: { value: "green" },
+            },
+          ],
+        },
+      ],
+    });
+
+    const exp = growthbook.getExperiments()[0];
+    const result1 = growthbook.run(exp);
+    expect(result1.variationId).toEqual(1);
+
+    growthbook.setAttributes({
+      id: "123",
+      memberType: "basic",
+      country: "Canada",
+    });
+
+    const result2 = growthbook.run(exp);
+    expect(result2.variationId).toEqual(0);
+
+    growthbook.destroy();
+  });
+
+  it("gates flag rule evaluation on prerequisite experiment flag", async () => {
+    const growthbook = new GrowthBook({
+      attributes: {
+        id: "1234",
+        memberType: "basic",
+        country: "USA",
+      },
+      features: {
+        parentExperimentFlag: {
+          defaultValue: 0,
+          rules: [
+            {
+              key: "experiment",
+              variations: [0, 1],
+              hashAttribute: "id",
+              hashVersion: 2,
+              ranges: [
+                [0, 0.5],
+                [0.5, 1.0],
+              ],
+            },
+          ],
+        },
+        childFlag: {
+          defaultValue: "default",
+          rules: [
+            {
+              // Bailout (fail) if the parent flag value is not 1
+              parentConditions: [
+                {
+                  id: "parentExperimentFlag",
+                  condition: { value: 1 },
+                  gate: true,
+                },
+              ],
+            },
+            {
+              condition: { memberType: "basic" },
+              force: "success",
+            },
+          ],
+        },
+      },
+    });
+
+    const result1 = growthbook.evalFeature("childFlag");
+    expect(result1.value).toEqual("success");
+
+    growthbook.destroy();
+  });
+
+  it("conditionally applies a force rule based on prerequisite targeting", async () => {
+    const growthbook = new GrowthBook({
+      attributes: {
+        id: "123",
+        memberType: "basic",
+        otherGatingProperty: "allow",
+        country: "USA",
+      },
+      features: {
+        parentFlag: {
+          defaultValue: "silver",
+          rules: [
+            {
+              condition: { country: "Canada" },
+              force: "red",
+            },
+            {
+              condition: { country: { $in: ["USA", "Mexico"] } },
+              force: "green",
+            },
+          ],
+        },
+        childFlag: {
+          defaultValue: "default",
+          rules: [
+            {
+              // Only apply force rule if parentConditions pass
+              parentConditions: [
+                {
+                  id: "parentFlag",
+                  condition: { value: "green" },
+                },
+              ],
+              condition: { otherGatingProperty: "allow" },
+              force: "dark mode",
+            },
+            {
+              condition: { memberType: "basic" },
+              force: "light mode",
+            },
+          ],
+        },
+      },
+    });
+
+    const result1 = growthbook.evalFeature("childFlag");
+    expect(result1.value).toEqual("dark mode");
+
+    growthbook.setAttributes({
+      id: "123",
+      memberType: "basic",
+      otherGatingProperty: "allow",
+      country: "Canada",
+    });
+
+    const result2 = growthbook.evalFeature("childFlag");
+    expect(result2.value).toEqual("light mode");
+
+    growthbook.setAttributes({
+      id: "123",
+      memberType: "basic",
+      otherGatingProperty: "deny",
+      country: "USA",
+    });
+
+    const result3 = growthbook.evalFeature("childFlag");
+    expect(result3.value).toEqual("light mode");
+
+    growthbook.destroy();
+  });
+
+  it("conditionally applies a force rule based on prerequisite JSON targeting", async () => {
+    const growthbook = new GrowthBook({
+      attributes: {
+        id: "123",
+        memberType: "basic",
+        country: "USA",
+      },
+      features: {
+        parentFlag: {
+          defaultValue: { foo: true, bar: {} },
+          rules: [
+            {
+              condition: { country: "Canada" },
+              force: { foo: true, bar: { color: "red" } },
+            },
+            {
+              condition: { country: { $in: ["USA", "Mexico"] } },
+              force: { foo: true, bar: { color: "green" } },
+            },
+          ],
+        },
+        childFlag: {
+          defaultValue: "default",
+          rules: [
+            {
+              // Only apply force rule if parentConditions pass
+              parentConditions: [
+                {
+                  id: "parentFlag",
+                  condition: { "value.bar.color": "green" },
+                },
+              ],
+              force: "dark mode",
+            },
+            {
+              condition: { memberType: "basic" },
+              force: "light mode",
+            },
+          ],
+        },
+        childFlag2: {
+          defaultValue: "default",
+          rules: [
+            {
+              // Only apply force rule if parentConditions pass
+              parentConditions: [
+                {
+                  id: "parentFlag",
+                  condition: { value: { $exists: true } },
+                },
+              ],
+              force: "dark mode",
+            },
+            {
+              condition: { memberType: "basic" },
+              force: "light mode",
+            },
+          ],
+        },
+      },
+    });
+
+    const result1a = growthbook.evalFeature("childFlag");
+    expect(result1a.value).toEqual("dark mode");
+
+    const result1b = growthbook.evalFeature("childFlag2");
+    expect(result1b.value).toEqual("dark mode");
+
+    growthbook.setAttributes({
+      id: "123",
+      memberType: "basic",
+      otherGatingProperty: "allow",
+      country: "Canada",
+    });
+
+    const result2 = growthbook.evalFeature("childFlag");
+    expect(result2.value).toEqual("light mode");
+
+    growthbook.destroy();
+  });
+
+  it("returns null when hitting a prerequisite cycle", async () => {
+    const growthbook = new GrowthBook({
+      attributes: {
+        id: "123",
+        memberType: "basic",
+        country: "USA",
+      },
+      features: {
+        parentFlag: {
+          defaultValue: "silver",
+          rules: [
+            {
+              parentConditions: [
+                {
+                  id: "childFlag",
+                  condition: { $not: { value: "success" } },
+                },
+              ],
+              force: null,
+            },
+            {
+              condition: { country: "Canada" },
+              force: "red",
+            },
+            {
+              condition: { country: { $in: ["USA", "Mexico"] } },
+              force: "green",
+            },
+          ],
+        },
+        childFlag: {
+          defaultValue: "default",
+          rules: [
+            {
+              parentConditions: [
+                {
+                  id: "parentFlag",
+                  condition: { $not: { value: "green" } },
+                },
+              ],
+              force: null,
+            },
+            {
+              condition: { memberType: "basic" },
+              force: "success",
+            },
+          ],
+        },
+      },
+    });
+
+    const result = growthbook.evalFeature("childFlag");
+    expect(result.value).toEqual(null);
+    expect(result.source).toEqual("cyclicPrerequisite");
+
+    growthbook.destroy();
   });
 });

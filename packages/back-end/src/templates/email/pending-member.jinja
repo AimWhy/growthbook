@@ -1,0 +1,22 @@
+{% extends "base.jinja" %}
+{% import "utils.jinja" as utils %}
+
+{% block preview %}
+  {{ name|noHyperlink }} ({{ email }})
+{% endblock %}
+
+{% block title %}
+  A new user is requesting to join <strong>{{ organization|noHyperlink }}</strong> on GrowthBook
+{% endblock %}
+
+{% block top %}
+  <p style='margin: 0 0 20px;'>
+    Name: <strong>{{ name|noHyperlink }}</strong><br/>
+    Email: <strong>{{ email }}</strong><br/>
+  </p>
+  {{ utils.button("Review pending team members", teamUrl) }}
+{% endblock %}
+
+{% block lower %}
+  <p>You are receiving this email because you are the owner for the <strong>{{ organization|noHyperlink }}</strong> organization in GrowthBook.</p>
+{% endblock %}
